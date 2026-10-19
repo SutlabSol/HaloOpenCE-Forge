@@ -1,0 +1,13 @@
+# Ignore user map data and local generated caches
+maps/
+custom_maps/
+forge_maps/*
+!forge_maps/.gitkeep
+OpenCE Forge/forge_maps/*.map
+OpenCE Forge/cached_tags/*
+!OpenCE Forge/cached_tags/.gitkeep
+FORGE CODE/GAME MAPS/
+FORGE CODE/build/
+*.o
+*.obj
+*.pdb
