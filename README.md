@@ -12,8 +12,7 @@ This repository is structured as a **non-destructive drag-and-drop overlay** tha
 |-- OpenCE Forge/             <-- Standalone Forge menus, tools, and local tag cache
 |   |-- menus/                <-- Custom Forge Main Menu (Edit Maps & Join Forges only)
 |   |-- tools/                <-- forge_asset_compiler.exe
-|   |-- forge_maps/           <-- Local master tag cache (built automatically on first launch)
-|   +-- cached_tags/          <-- Local cached 3D tag data
+|   +-- cached_tags/          <-- Local tag cache (built automatically on first launch)
 |-- forge_maps/               <-- Clean folder where saved Forge maps are packaged (<map>/<map>.map, .bmp, .txt)
 +-- FORGE CODE/               <-- Complete standalone C source code, headers, and build script
 ```
@@ -30,7 +29,7 @@ This repository is structured as a **non-destructive drag-and-drop overlay** tha
 So that no copyrighted `.map` files or pre-packaged tag caches need to be distributed with the build, **`HaloCE Forge.exe`** asks to build your local tag cache on first launch:
 1. Point to your **Halo Custom Edition `custom_maps` folder** (`bitmaps.map`, `sounds.map`, `loc.map`, and default multiplayer `.map` files).
 2. Point to your **Halo Xbox / Retail PC `maps` folder** (`bitmaps.map`, `sounds.map`, and campaign `.map` files).
-3. Forge compiles `OpenCE Forge/forge_maps/forgeasset.map` locally with embedded campaign & multiplayer bitmaps, shaders, models, vehicles, weapons, and scenery.
+3. Forge extracts and builds your local tag cache in **`OpenCE Forge/cached_tags/`** with embedded campaign & multiplayer bitmaps, shaders, models, vehicles, weapons, and scenery.
 
 You can also add tags from any custom map in Forge Mode via **`[F2] Spawn Menu -> [F9] Add Tags to Cache`** (`MAPS` window).
 

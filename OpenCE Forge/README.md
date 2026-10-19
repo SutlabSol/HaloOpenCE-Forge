@@ -1,77 +1,64 @@
-# OpenCE Forge (`HaloCE Forge.exe`) — Architecture & Implementation Plan (`README.md`)
+# Halo OpenCE Forge (`HaloCE Forge.exe`) — Architecture & Documentation
 
-OpenCE Forge is a modular, additive map creation, AI encounter placement, and real-time 3D/2D editing suite for **OpenCE** (Halo: Combat Evolved decompilation port). All source code resides strictly inside `FORGE CODE/` without modifying any upstream file in `source/` or `port/`.
+OpenCE Forge is a standalone, non-destructive 3D Forge World Editor and Multiplayer Co-Op Sandbox for **OpenCE** (Halo: Combat Evolved decompilation port). All Forge source code resides inside `FORGE CODE/` without modifying any upstream file in `source/` or `port/`.
 
 ---
 
-## Directory Layout
+## Directory Layout (Drag-and-Drop Overlay)
 
 ```text
-OpenCE-Forge/
-├── HaloCE Forge.exe                      # Root Forge executable (built alongside halo.exe)
-├── custom_maps/                          # Exported standalone v609 maps (<name>.map, .bmp, .txt)
+<Your Halo OpenCE Folder>/
+├── HaloCE Forge.exe                      # Standalone Forge executable (leaves halo.exe & SDL3.dll untouched)
+├── forge_maps/                           # Clean folder where saved Forge maps are packaged (<name>/<name>.map, .bmp, .txt)
 ├── OpenCE Forge/                         # Runtime Forge directory
 │   ├── credits.md                        # Auto-generated tag & map creator attribution log
-│   └── forge_maps/
-│       ├── forgeasset.map                # Universal master asset cache (CE MP + PC Campaign tags)
-│       ├── customforgeasset.map          # User-injected community custom tags cache
-│       ├── bitmaps.map                   # CE resource map
-│       ├── sounds.map                    # CE resource map
-│       └── loc.map                       # CE resource map
-└── FORGE CODE/                           # All Forge source code, headers, tools, and build scripts
-    ├── README.md                         # Architecture & implementation plan (this file)
+│   ├── menus/                            # Custom Forge Main Menu XML & handmade UI art
+│   ├── tools/                            # Standalone forge_asset_compiler.exe CLI tool
+│   └── cached_tags/                      # Local Tag Cache Folder System (built automatically on first launch)
+│       ├── catalog.txt                   # Base tag cache manifest (CE multiplayer + Xbox/PC campaign tags)
+│       ├── custom_catalog.txt            # User-added custom map tag manifest ([F9] Add Tags to Cache)
+│       ├── bitmaps_cache.bin             # Embedded diffuse bitmap & tag data cache
+│       ├── vehicles/                     # Extracted 3D vehicle .ftag bundles
+│       ├── weapons/                      # Extracted 3D weapon .ftag bundles
+│       ├── scenery/                      # Extracted 3D scenery .ftag bundles
+│       ├── devices/                      # Extracted 3D device/machine .ftag bundles
+│       └── bipeds/                       # Extracted 3D Monitor & biped .ftag bundles
+└── FORGE CODE/                           # Standalone Forge C source code, headers, tools, and build script
+    ├── README.md                         # Architecture & documentation (this file)
     ├── projectrules.md                   # Authoritative rules & guardrails
-    ├── build_forge.py                    # Cross-platform build script (Windows, Linux, Android)
+    ├── build_forge.py                    # Build & packaging script
     ├── include/
-    │   ├── forge_cache_builder.h         # Tag cloner, asset compiler, custom tag injector, map exporter
-    │   └── forge_engine.h                # 2D Blueprint, 3D Monitor/Grab/Palette, AI, and Network sync APIs
+    │   ├── forge_cache_builder.h         # Tag cloner, cache builder, custom tag extractor, map exporter
+    │   ├── forge_engine.h                # 2D Blueprint, 3D Monitor/Grab/Palette, and Network sync APIs
+    │   └── forge_net_override.h          # Forge network version isolation header
     ├── src/
-    │   ├── forge_cache_builder.c         # Schema-driven tag cloner, PC->CE internalizer, credits writer, exporter
-    │   ├── forge_runtime_tags.c          # Runtime tag cache merger for live 3D spawning
-    │   ├── forge_blueprint_2d.c          # Mode 1: 2D Overhead Blueprint Editor (Single-Player)
-    │   ├── forge_3d_mode.c               # Mode 2: 3D In-Engine Monitor Cam, Physics Beam, Spawn Palette
-    │   ├── forge_ai.c                    # Live Engine NPC AI Spawning (Friendly vs Enemy) & Allegiances
-    │   ├── forge_network.c               # Forge Lobby Isolation & Multiplayer 3D Entity/AI Replication
-    │   └── forge_editor.c                # Master Forge state machine, HUD/UI modals, and entry hooks
+    │   ├── forge_cache_builder.c         # Schema-driven tag cloner, bitmap/sound internalizer, credits writer, exporter
+    │   ├── forge_runtime_tags.c          # First-launch local tag cache builder & runtime .ftag / bitmap shader loader
+    │   ├── forge_blueprint_2d.c          # 2D Top-Down Blueprint Editor
+    │   ├── forge_3d_mode.c               # 3D In-Engine Forge Mode, Physics Beam, 3D Preview, and Spawn Menu
+    │   ├── forge_ai.c                    # Engine AI support
+    │   ├── forge_network.c               # Forge Lobby Isolation & Multiplayer 3D Entity Replication
+    │   └── forge_hooks.c                 # Engine & SDL3 hooks and forge_maps/ path redirection
     └── tools/
-        └── forge_asset_compiler.c        # Standalone CLI compiler & validator for forgeasset.map / customforgeasset.map
+        └── forge_asset_compiler.c        # Standalone CLI tag cache compiler & validator
 ```
 
 ---
 
-## Execution & Implementation Plan
+## First-Launch Local Tag Cache Builder (`OpenCE Forge/cached_tags/`)
 
-### Step 1: Asset Pipeline, Credits Generator & Map Exporter (`forge_cache_builder.c` + `forge_asset_compiler.c`)
-1. **Schema-Driven Tag Cloner**:
-   - Links directly against OpenCE's compiled `tag_schema_*.o`, `tag_validate.o`, and `cache_file_formats.o`.
-   - Clones allowed tag classes (`bipd`, `actv`, `actr`, `antr`, `vehi`, `weap`, `eqip`, `itmc`, `scen`, `mach`, `ctrl`, `lifi`, and their model/collision/physics/damage/shader/bitmap/sound dependencies) while strictly excluding `sbsp` (Structure BSPs).
-   - Preserves Custom Edition resource map links (`bitmaps.map`, `sounds.map`, `loc.map`) whenever a bitmap/sound exists in CE resource maps, and internalizes PC-only bitmap pixels and sound samples from `PC MAPS/bitmaps.map` and `PC MAPS/sounds.map`.
-2. **Automated Attribution (`OpenCE Forge/credits.md`)**:
-   - Tracks every harvested or injected tag's class, path, source `.map` filename, and `*<map file name>* and its original creator` in `OpenCE Forge/credits.md`.
-3. **Compile & Validate Master Caches**:
-   - Build `FORGE CODE/build/forge_asset_compiler.exe`.
-   - Generate `OpenCE Forge/forge_maps/forgeasset.map`, `OpenCE Forge/forge_maps/customforgeasset.map`, and `OpenCE Forge/credits.md`.
-   - Validate generated maps with `custom_edition_cache_load` + `tag_validate_custom_edition_tags` (0 errors, 0 corrections).
-4. **"Save Copy As..." Exporter**:
-   - Bakes placed objects (from `forgeasset.map` and, in single-player, `customforgeasset.map`), spawns, netgame flags, netgame equipment, and NPC AI encounters (`ai_actor_palette`, `ai_encounters`, `squads`, `starting_locations`, and BSP-cluster `firing_positions`) into `custom_maps/<name>.map` along with a rendered 140x114 `.bmp` thumbnail and `.txt` description.
+So that no copyrighted `.map` files or pre-packaged tag caches need to be distributed with the build, **`HaloCE Forge.exe`** asks to build your local tag cache (`OpenCE Forge/cached_tags/`) on first launch:
+1. Point to your **Halo Custom Edition `custom_maps` folder** (`bitmaps.map`, `sounds.map`, `loc.map`, and default multiplayer `.map` files).
+2. Point to your **Halo Xbox / Retail PC `maps` folder** (`bitmaps.map`, `sounds.map`, and campaign `.map` files).
+3. Forge extracts and builds your local tag cache in **`OpenCE Forge/cached_tags/`** (`.ftag` 3D mesh/shader bundles, `catalog.txt`, and embedded campaign/multiplayer bitmaps in `bitmaps_cache.bin`), and records creator attribution in `OpenCE Forge/credits.md`.
 
-### Step 2: 2D Blueprint Mode & 3D In-Engine Mode (`forge_blueprint_2d.c`, `forge_3d_mode.c`, `forge_ai.c`, `forge_runtime_tags.c`)
-1. **Mode 1 — 2D Blueprint Editor (Single-Player)**:
-   - Extracts 2D collision floorplan wireframe from the active map's `structure_bsp`.
-   - Interactive top-down canvas with pan/zoom, $X/Y$ placement, $Z$-elevation slider, yaw rotation, team toggles, budget meter, and one-click export to `custom_maps/`.
-   - Full access to both `forgeasset.map` and `customforgeasset.map`.
-2. **Mode 2 — 3D In-Engine Mode (Single-Player, Multiplayer PVP & Online Co-op Campaign)**:
-   - **Monitor / Free-Cam**: Smooth 6DOF flight movement toggleable at any time.
-   - **Physics Beam / Object Grab**: Raycast grab, translation, rotation snapping (15°, 45°, 90°), ground snapping, and deletion.
-   - **Categorized Spawn Palette**: *Weapons, Vehicles, Spawns, Objectives, Scenery, Barriers, Teleporters, AI Squads*.
-   - **Multiplayer Asset Guard**: Automatically restricts the spawn palette to `forgeasset.map` during live multiplayer/co-op sessions, while enabling both `forgeasset.map` and `customforgeasset.map` in single-player sessions.
-   - **Live Engine NPC AI Placement**: Spawns native Halo CE AI units (`actv`/`bipd`) with **Friendly** (Human/Blue) vs **Enemy** (Covenant/Red/Flood) team toggle that immediately engage in combat.
+You can also add tags from any custom `.map` file at any time in Forge Mode via **`[F2] Spawn Menu -> [F9] Add Tags to Cache`** (`MAPS` window).
 
-### Step 3: Networking, Lobby Isolation & Packaging (`forge_network.c`, `forge_editor.c`, `build_forge.py`)
-1. **Session Handshake & Isolation**:
-   - Marks Forge lobbies so only `HaloCE Forge.exe` clients can discover/join Forge editing sessions, while stock `halo.exe` clients are cleanly rejected (`"Requires HaloCE Forge to join"`).
-2. **Multiplayer 3D Synchronization**:
-   - Host authoritatively simulates dynamic objects, limits, and AI states, replicating Forge placement/grab/move/delete/team actions to connected Forge clients.
-3. **Build & Verify `HaloCE Forge.exe`**:
-   - Compile all Forge modules and link `C:\Users\LeviB\Projects\OpenCE-Forge\HaloCE Forge.exe` (plus Linux/Android targets in `FORGE CODE/build_forge.py`).
-   - Run automated verification tests on `forgeasset.map`, `customforgeasset.map`, `credits.md`, exported maps in `custom_maps/`, and `HaloCE Forge.exe`.
+---
+
+## Saved Forge Maps (`forge_maps/<map_name>/`)
+
+Pressing **`F5`** (*Save Map*) packages each saved Forge map into its own clean subfolder inside **`forge_maps/<map_name>/`** alongside `maps/` and `custom_maps/`:
+- `forge_maps/<map_name>/<map_name>.map`
+- `forge_maps/<map_name>/<map_name>.bmp`
+- `forge_maps/<map_name>/<map_name>.txt`
