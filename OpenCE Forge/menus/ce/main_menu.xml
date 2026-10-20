@@ -96,16 +96,17 @@
 		<child widget="error/warning_creating_player_profile_screen"/>
 	</widget>
 
-	<!-- Forge Submenu: Multiplayer / Add Tags to Cache -->
+	<!-- Forge Submenu: Single Player / Multiplayer / Add Tags to Cache -->
 	<widget name="main_menu/forge_select/forge_menu" width="640" height="480" flags="pass_unhandled_to_focused_child">
 		<child widget="main_menu/halo_logo" y="28"/>
 		<child widget="main_menu/forge_select/forge_menu_select_list"/>
 	</widget>
 	<widget name="main_menu/forge_select/forge_menu_select_list" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_items">
 		<on event="created" run="campaign menu init"/>
-		<child widget="main_menu/forge_select/forge_item_multiplayer" x="192" y="295"/>
-		<child widget="main_menu/forge_select/forge_item_inject_tags" x="192" y="335"/>
-		<child widget="main_menu/campaign_select/menu_item_back" x="192" y="375"/>
+		<child widget="main_menu/forge_select/forge_item_single_player" x="192" y="265"/>
+		<child widget="main_menu/forge_select/forge_item_multiplayer" x="192" y="305"/>
+		<child widget="main_menu/forge_select/forge_item_inject_tags" x="192" y="345"/>
+		<child widget="main_menu/campaign_select/menu_item_back" x="192" y="385"/>
 	</widget>
 	<widget name="main_menu/forge_select/forge_item_single_player" type="text" width="256" height="33" bitmap="main_menu/forge_select/item_single_player" string_list="main_menu/main_menu_options" string_index="1" font="ui\small_ui" color="#000080FF">
 		<on event="a" open="main_menu/solo_level_select/solo_level_select_screen"/>

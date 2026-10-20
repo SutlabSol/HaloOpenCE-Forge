@@ -560,6 +560,7 @@ void forge_runtime_init(void)
 	g_forge.grabbed_object_index = NONE;
 	g_forge.grabbed_live_index = -1;
 	g_forge.hovered_object_index = NONE;
+	g_forge.hovered_live_index = -1;
 	g_forge.grab_distance = 5.0f;
 	g_forge.bp_zoom = 1.0f;
 	g_forge.bp_cam_z = 12.0f;

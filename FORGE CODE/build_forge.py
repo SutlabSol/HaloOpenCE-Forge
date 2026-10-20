@@ -546,16 +546,17 @@ def generate_forge_menus(forge_addon_dir: Path) -> None:
 		<child widget="error/warning_creating_player_profile_screen"/>
 	</widget>
 
-	<!-- Forge Submenu: Multiplayer / Add Tags to Cache -->
+	<!-- Forge Submenu: Single Player / Multiplayer / Add Tags to Cache -->
 	<widget name="main_menu/forge_select/forge_menu" width="640" height="480" flags="pass_unhandled_to_focused_child">
 		<child widget="main_menu/halo_logo" y="28"/>
 		<child widget="main_menu/forge_select/forge_menu_select_list"/>
 	</widget>
 	<widget name="main_menu/forge_select/forge_menu_select_list" type="column_list" width="640" height="480" flags="pass_unhandled_to_focused_child up_down_tabs_items">
 		<on event="created" run="campaign menu init"/>
-		<child widget="main_menu/forge_select/forge_item_multiplayer" x="192" y="295"/>
-		<child widget="main_menu/forge_select/forge_item_inject_tags" x="192" y="335"/>
-		<child widget="main_menu/campaign_select/menu_item_back" x="192" y="375"/>
+		<child widget="main_menu/forge_select/forge_item_single_player" x="192" y="265"/>
+		<child widget="main_menu/forge_select/forge_item_multiplayer" x="192" y="305"/>
+		<child widget="main_menu/forge_select/forge_item_inject_tags" x="192" y="345"/>
+		<child widget="main_menu/campaign_select/menu_item_back" x="192" y="385"/>
 	</widget>
 	<widget name="main_menu/forge_select/forge_item_single_player" type="text" width="256" height="33" bitmap="main_menu/forge_select/item_single_player" string_list="main_menu/main_menu_options" string_index="1" font="ui\\small_ui" color="#000080FF">
 		<on event="a" open="main_menu/solo_level_select/solo_level_select_screen"/>
@@ -649,6 +650,260 @@ def generate_forge_menus(forge_addon_dir: Path) -> None:
     out_xml.parent.mkdir(parents=True, exist_ok=True)
     out_xml.write_text(xml_content, encoding="utf-8")
     print(f"[build_forge] Generated native Forge menus: {out_xml}")
+
+
+def _build_panel_png_bytes(
+    width: int,
+    height: int,
+    top_rgb: tuple[int, int, int],
+    bot_rgb: tuple[int, int, int],
+    border_rgb: tuple[int, int, int],
+    header_h: int = 0,
+    header_rgb: tuple[int, int, int] = (20, 52, 96),
+    alpha: int = 224,
+) -> bytes:
+    buf = bytearray(width * height * 4)
+    for y in range(height):
+        t = y / max(1, height - 1)
+        r = round(top_rgb[0] * (1.0 - t) + bot_rgb[0] * t)
+        g = round(top_rgb[1] * (1.0 - t) + bot_rgb[1] * t)
+        b = round(top_rgb[2] * (1.0 - t) + bot_rgb[2] * t)
+        a = alpha
+        if header_h > 0 and y < header_h:
+            ht = y / max(1, header_h - 1)
+            r = round(header_rgb[0] * (1.15 - 0.3 * ht))
+            g = round(header_rgb[1] * (1.15 - 0.3 * ht))
+            b = round(header_rgb[2] * (1.15 - 0.3 * ht))
+            a = min(255, alpha + 20)
+        # Subtle horizontal scanline texture every 3rd row
+        if y % 3 == 0:
+            r = min(255, r + 5)
+            g = min(255, g + 8)
+            b = min(255, b + 12)
+        for x in range(width):
+            idx = (y * width + x) * 4
+            # Outer 2px glowing border + header separator line
+            if x == 0 or x == width - 1 or y == 0 or y == height - 1:
+                buf[idx : idx + 4] = bytes((border_rgb[0], border_rgb[1], border_rgb[2], 245))
+            elif x == 1 or x == width - 2 or y == 1 or y == height - 2 or (header_h > 0 and y == header_h):
+                buf[idx : idx + 4] = bytes((
+                    min(255, (border_rgb[0] + r) // 2),
+                    min(255, (border_rgb[1] + g) // 2),
+                    min(255, (border_rgb[2] + b) // 2),
+                    235,
+                ))
+            else:
+                buf[idx : idx + 4] = bytes((max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)), a))
+    return bytes(buf)
+
+
+def generate_customizable_forge_ui_assets(forge_addon_dir: Path) -> None:
+    """
+    Generates `OpenCE Forge/ui/forge_ui.xml` and default editable PNG background images
+    (`panel_spawn_menu.png`, `panel_preview.png`, `panel_top_bar.png`, `panel_bottom_bar.png`,
+    `panel_modal.png`) if they do not already exist, so the user can freely customize
+    fonts, font styles, font sizes, colors, and menu background images!
+    """
+    ui_dir = forge_addon_dir / "ui"
+    ui_dir.mkdir(parents=True, exist_ok=True)
+
+    panels = [
+        ("panel_spawn_menu.png", 260, 220, (12, 26, 48), (6, 14, 28), (68, 152, 242), 24, (22, 58, 104), 228),
+        ("panel_preview.png", 260, 52, (10, 30, 42), (6, 18, 28), (68, 255, 152), 0, (16, 48, 64), 224),
+        ("panel_top_bar.png", 234, 28, (14, 28, 52), (8, 16, 32), (60, 140, 230), 0, (14, 28, 52), 212),
+        ("panel_bottom_bar.png", 510, 18, (12, 24, 44), (6, 14, 28), (53, 120, 196), 0, (12, 24, 44), 196),
+        ("panel_modal.png", 420, 260, (14, 28, 52), (8, 16, 32), (68, 152, 242), 24, (22, 58, 104), 236),
+    ]
+    for filename, w, h, top_c, bot_c, brd_c, hdr_h, hdr_c, alpha in panels:
+        png_path = ui_dir / filename
+        if not png_path.is_file():
+            rgba = _build_panel_png_bytes(w, h, top_c, bot_c, brd_c, hdr_h, hdr_c, alpha)
+            write_rgba_png(png_path, w, h, rgba)
+
+    xml_path = ui_dir / "forge_ui.xml"
+    if not xml_path.is_file():
+        xml_text = """<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ============================================================================
+  OpenCE Forge - Customizable In-Game UI Theme & Background Configuration
+  File: OpenCE Forge/ui/forge_ui.xml
+  Press [F8] in-game at any time to live-reload this file and all PNG images!
+  ============================================================================
+
+  FONT ATTRIBUTES (available on every UI section below):
+    font="terminal"      Font family: "terminal", "system", "small", "large", "ticker",
+                         or any loaded font tag path (e.g. "ui\\small_ui", "ui\\large_ui").
+    style="plain"        Font style: "plain", "bold", "italic", "condense", "underline".
+    size="1.0"           Font size multiplier (e.g. "0.85", "1.0", "1.2", "1.5").
+    title_color="#..."   Header / title text color (#RRGGBB or #AARRGGBB hex).
+    text_color="#..."    Normal item / body text color (#RRGGBB or #AARRGGBB hex).
+    selected_color="#..." Highlighted / selected item text color (#RRGGBB or #AARRGGBB hex).
+
+  BACKGROUND & PANEL ATTRIBUTES:
+    background="panel_spawn_menu.png"
+                         PNG image file inside `OpenCE Forge/ui/` drawn behind the menu.
+                         Edit these PNGs in Photoshop/GIMP/Paint.NET and press [F8] in-game!
+    use_image="true"     Set "true" to draw the PNG image, or "false" to use solid bg_color.
+    image_tint="#FFFFFFFF"
+                         Optional ARGB tint multiplied with the PNG background (#FFFFFFFF = pure PNG).
+    bg_color="#E00A1526" Solid fallback background color when use_image="false".
+    header_color="#00000000"
+                         Optional header overlay color (#00000000 = transparent so PNG header shows).
+    highlight_color="#D8225C9C"
+                         Selected row highlight bar color.
+    border_color="#00000000"
+                         Optional extra border color (#00000000 = use the border in the PNG image).
+-->
+<forge_ui>
+    <!-- [F2] Forge Object Spawn Palette Menu (Left-Aligned Category & Item List) -->
+    <spawn_menu
+        font="terminal"
+        style="plain"
+        size="1.0"
+        title_color="#FFA6EBFF"
+        text_color="#FFC7DBF5"
+        selected_color="#FFFFF5A6"
+        background="panel_spawn_menu.png"
+        use_image="true"
+        image_tint="#FFFFFFFF"
+        bg_color="#E00A1526"
+        header_color="#6014325A"
+        highlight_color="#D8225C9C"
+        border_color="#804498F2"
+    />
+
+    <!-- Live 3D Item Preview Card (Below the [F2] Item List) -->
+    <preview_panel
+        font="terminal"
+        style="plain"
+        size="1.0"
+        title_color="#FF80FFB8"
+        text_color="#FFC7E0FA"
+        selected_color="#FFFFEB8C"
+        background="panel_preview.png"
+        use_image="true"
+        image_tint="#FFFFFFFF"
+        bg_color="#D80A1526"
+        header_color="#00000000"
+        highlight_color="#D8225C9C"
+        border_color="#8044FF98"
+    />
+
+    <!-- [X] Object & Teleporter Properties Panel -->
+    <properties_menu
+        font="terminal"
+        style="plain"
+        size="1.0"
+        title_color="#FFA6EBFF"
+        text_color="#FFD1E0F5"
+        selected_color="#FFFFF5A6"
+        background="panel_modal.png"
+        use_image="true"
+        image_tint="#FFFFFFFF"
+        bg_color="#E00A1526"
+        header_color="#6014325A"
+        highlight_color="#D8225C9C"
+        border_color="#804498F2"
+    />
+
+    <!-- Top-Right Forge Mode Status & Object Budget Pill -->
+    <top_bar
+        font="terminal"
+        style="plain"
+        size="1.0"
+        title_color="#FF8CE0FF"
+        text_color="#FFD1E0F2"
+        selected_color="#FFFFF5A6"
+        background="panel_top_bar.png"
+        use_image="true"
+        image_tint="#FFFFFFFF"
+        bg_color="#CC0A1426"
+        header_color="#00000000"
+        border_color="#803C8CE6"
+    />
+
+    <!-- Bottom Control Strip ([F1] Forge Mode / [F2] Menu / [F5] Save) -->
+    <bottom_bar
+        font="terminal"
+        style="plain"
+        size="1.0"
+        title_color="#FFA6EBFF"
+        text_color="#FFC7E5FF"
+        selected_color="#FFFFF5A6"
+        background="panel_bottom_bar.png"
+        use_image="true"
+        image_tint="#FFFFFFFF"
+        bg_color="#B8081222"
+        header_color="#00000000"
+        border_color="#603578C4"
+    />
+
+    <!-- [F5] Initial Save Map Name Modal -->
+    <save_modal
+        font="terminal"
+        style="plain"
+        size="1.0"
+        title_color="#FFA6EBFF"
+        text_color="#FFB8E0FA"
+        selected_color="#FFFFF2A6"
+        background="panel_modal.png"
+        use_image="true"
+        image_tint="#FFFFFFFF"
+        bg_color="#EC0A1526"
+        header_color="#6014325A"
+        highlight_color="#D8225C9C"
+        border_color="#804498F2"
+    />
+
+    <!-- [F6] MAPS: Add Tags to Cache Modal -->
+    <maps_modal
+        font="terminal"
+        style="plain"
+        size="1.0"
+        title_color="#FFA6EBFF"
+        text_color="#FFD1DBEB"
+        selected_color="#FFFFF299"
+        background="panel_modal.png"
+        use_image="true"
+        image_tint="#FFFFFFFF"
+        bg_color="#E60A1526"
+        header_color="#6014325A"
+        highlight_color="#D8225C9C"
+        border_color="#804498F2"
+    />
+
+    <!-- Status Notification Toast Bar -->
+    <toast_bar
+        font="terminal"
+        style="plain"
+        size="1.0"
+        title_color="#FFA6F2FF"
+        text_color="#FFA6F2FF"
+        selected_color="#FFFFFFFF"
+        background="panel_bottom_bar.png"
+        use_image="true"
+        image_tint="#FFFFFFFF"
+        bg_color="#D80A182C"
+        header_color="#00000000"
+        border_color="#804498F2"
+    />
+
+    <!-- 3D Teleporter In/Out, Objective Markers & Reticle Hover Labels -->
+    <markers
+        font="terminal"
+        style="plain"
+        size="1.0"
+        title_color="#F259FF8C"
+        text_color="#F2FFE673"
+        selected_color="#F273FFA6"
+        background="none"
+        use_image="false"
+    />
+</forge_ui>
+"""
+        xml_path.write_text(xml_text, encoding="utf-8")
+    print(f"[build_forge] Ensured customizable Forge UI XML & PNG backgrounds in: {ui_dir}")
+
 
 
 def build_asset_compiler() -> Path:
@@ -789,6 +1044,7 @@ def package_opence_build_folder(haloce_forge_exe: Path) -> None:
         shutil.copy2(bg_src, bg_dst)
 
     generate_forge_menus(forge_addon_dir)
+    generate_customizable_forge_ui_assets(forge_addon_dir)
     generate_cached_tags_folder(forge_addon_dir)
 
     shutil.copy2(FORGE_DIR / "README.md", forge_addon_dir / "README.md")

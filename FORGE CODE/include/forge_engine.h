@@ -144,7 +144,7 @@ struct forge_live_instance
 	char label[64];
 };
 
-#define FORGE_MAX_LIVE_INSTANCES 512
+#define FORGE_MAX_LIVE_INSTANCES 1024
 
 /* ---------- Global Runtime Forge State */
 
@@ -174,6 +174,7 @@ struct forge_runtime_state
 	float grab_distance;
 	float grab_yaw, grab_pitch, grab_roll;
 	int32_t hovered_object_index;
+	int32_t hovered_live_index;
 	char hovered_object_label[128];
 	float ray_hit_x, ray_hit_y, ray_hit_z;
 	int ray_hit_valid;

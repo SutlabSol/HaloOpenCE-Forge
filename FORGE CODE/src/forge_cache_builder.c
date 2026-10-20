@@ -2994,50 +2994,115 @@ int forge_export_scenario_map(
 			inplace_apply_default_object_edit(&out, base_map.tag_data_offset, scnr_foff, &edits->default_edits[i]);
 		}
 
-		/* 2. Apply player spawn additions/replacements */
+		/* 2. Apply player spawn and netgame flag additions/replacements */
 		if (edits->replace_player_spawns)
-			write_s32(out.data + scnr_foff + (uint32_t)offsetof(struct scenario, players), 0);
+		{
+			uint32_t pl_field = (uint32_t)offsetof(struct scenario, players);
+			if (edits->player_spawn_count > 0)
+			{
+				uint32_t arr_foff = buf_alloc(&out, (uint32_t)edits->player_spawn_count * 52u, 4);
+				if (arr_foff > 0 && out.data)
+				{
+					write_s32(out.data + scnr_foff + pl_field + 0u, edits->player_spawn_count);
+					write_u32(out.data + scnr_foff + pl_field + 4u, CE_TAG_BASE_ADDR + (arr_foff - base_map.tag_data_offset));
+					write_u32(out.data + scnr_foff + pl_field + 8u, 0);
+					for (i = 0; i < edits->player_spawn_count; i++)
+					{
+						struct forge_player_spawn_entry const *sp = &edits->player_spawns[i];
+						uint32_t eo = arr_foff + (uint32_t)i * 52u;
+						write_f32(out.data + eo + 0x00u, sp->x);
+						write_f32(out.data + eo + 0x04u, sp->y);
+						write_f32(out.data + eo + 0x08u, sp->z);
+						write_f32(out.data + eo + 0x0Cu, sp->yaw);
+						write_s16(out.data + eo + 0x10u, sp->team_index);
+						write_s16(out.data + eo + 0x12u, sp->bsp_index);
+						write_s16(out.data + eo + 0x14u, sp->type0);
+						write_s16(out.data + eo + 0x16u, sp->type1);
+						write_s16(out.data + eo + 0x18u, sp->type2);
+						write_s16(out.data + eo + 0x1Au, sp->type3);
+					}
+				}
+			}
+			else
+			{
+				write_s32(out.data + scnr_foff + pl_field + 0u, 0);
+			}
+		}
+		else
+		{
+			for (i = 0; i < edits->player_spawn_count; i++)
+			{
+				struct forge_player_spawn_entry const *sp = &edits->player_spawns[i];
+				uint32_t eo = inplace_append_scenario_element(
+					&out, base_map.tag_data_offset, scnr_foff, (uint32_t)offsetof(struct scenario, players), 52u);
+				if (eo > 0 && out.data)
+				{
+					write_f32(out.data + eo + 0x00u, sp->x);
+					write_f32(out.data + eo + 0x04u, sp->y);
+					write_f32(out.data + eo + 0x08u, sp->z);
+					write_f32(out.data + eo + 0x0Cu, sp->yaw);
+					write_s16(out.data + eo + 0x10u, sp->team_index);
+					write_s16(out.data + eo + 0x12u, sp->bsp_index);
+					write_s16(out.data + eo + 0x14u, sp->type0 ? sp->type0 : 12);
+					write_s16(out.data + eo + 0x16u, sp->type1);
+					write_s16(out.data + eo + 0x18u, sp->type2);
+					write_s16(out.data + eo + 0x1Au, sp->type3);
+				}
+			}
+		}
+
 		if (edits->replace_netgame_flags)
-			write_s32(out.data + scnr_foff + (uint32_t)offsetof(struct scenario, netgame_flags), 0);
+		{
+			uint32_t nf_field = (uint32_t)offsetof(struct scenario, netgame_flags);
+			if (edits->netgame_flag_count > 0)
+			{
+				uint32_t arr_foff = buf_alloc(&out, (uint32_t)edits->netgame_flag_count * 148u, 4);
+				if (arr_foff > 0 && out.data)
+				{
+					write_s32(out.data + scnr_foff + nf_field + 0u, edits->netgame_flag_count);
+					write_u32(out.data + scnr_foff + nf_field + 4u, CE_TAG_BASE_ADDR + (arr_foff - base_map.tag_data_offset));
+					write_u32(out.data + scnr_foff + nf_field + 8u, 0);
+					for (i = 0; i < edits->netgame_flag_count; i++)
+					{
+						struct forge_netgame_flag_entry const *nf = &edits->netgame_flags[i];
+						uint32_t eo = arr_foff + (uint32_t)i * 148u;
+						write_f32(out.data + eo + 0x00u, nf->x);
+						write_f32(out.data + eo + 0x04u, nf->y);
+						write_f32(out.data + eo + 0x08u, nf->z);
+						write_f32(out.data + eo + 0x0Cu, nf->yaw);
+						write_s16(out.data + eo + 0x10u, nf->type);
+						write_s16(out.data + eo + 0x12u, nf->usage_id);
+						write_s32(out.data + eo + 0x1Cu, -1);
+					}
+				}
+			}
+			else
+			{
+				write_s32(out.data + scnr_foff + nf_field + 0u, 0);
+			}
+		}
+		else
+		{
+			for (i = 0; i < edits->netgame_flag_count; i++)
+			{
+				struct forge_netgame_flag_entry const *nf = &edits->netgame_flags[i];
+				uint32_t eo = inplace_append_scenario_element(
+					&out, base_map.tag_data_offset, scnr_foff, (uint32_t)offsetof(struct scenario, netgame_flags), 148u);
+				if (eo > 0 && out.data)
+				{
+					write_f32(out.data + eo + 0x00u, nf->x);
+					write_f32(out.data + eo + 0x04u, nf->y);
+					write_f32(out.data + eo + 0x08u, nf->z);
+					write_f32(out.data + eo + 0x0Cu, nf->yaw);
+					write_s16(out.data + eo + 0x10u, nf->type);
+					write_s16(out.data + eo + 0x12u, nf->usage_id);
+					write_s32(out.data + eo + 0x1Cu, -1);
+				}
+			}
+		}
+
 		if (edits->replace_netgame_equipment)
 			write_s32(out.data + scnr_foff + (uint32_t)offsetof(struct scenario, netgame_equipment), 0);
-
-		for (i = 0; i < edits->player_spawn_count; i++)
-		{
-			struct forge_player_spawn_entry const *sp = &edits->player_spawns[i];
-			uint32_t eo = inplace_append_scenario_element(
-				&out, base_map.tag_data_offset, scnr_foff, (uint32_t)offsetof(struct scenario, players), 52u);
-			if (eo > 0 && out.data)
-			{
-				write_f32(out.data + eo + 0x00u, sp->x);
-				write_f32(out.data + eo + 0x04u, sp->y);
-				write_f32(out.data + eo + 0x08u, sp->z);
-				write_f32(out.data + eo + 0x0Cu, sp->yaw);
-				write_s16(out.data + eo + 0x10u, sp->team_index);
-				write_s16(out.data + eo + 0x12u, sp->bsp_index);
-				write_s16(out.data + eo + 0x14u, sp->type0 ? sp->type0 : 12);
-				write_s16(out.data + eo + 0x16u, sp->type1);
-				write_s16(out.data + eo + 0x18u, sp->type2);
-				write_s16(out.data + eo + 0x1Au, sp->type3);
-			}
-		}
-
-		for (i = 0; i < edits->netgame_flag_count; i++)
-		{
-			struct forge_netgame_flag_entry const *nf = &edits->netgame_flags[i];
-			uint32_t eo = inplace_append_scenario_element(
-				&out, base_map.tag_data_offset, scnr_foff, (uint32_t)offsetof(struct scenario, netgame_flags), 148u);
-			if (eo > 0 && out.data)
-			{
-				write_f32(out.data + eo + 0x00u, nf->x);
-				write_f32(out.data + eo + 0x04u, nf->y);
-				write_f32(out.data + eo + 0x08u, nf->z);
-				write_f32(out.data + eo + 0x0Cu, nf->yaw);
-				write_s16(out.data + eo + 0x10u, nf->type);
-				write_s16(out.data + eo + 0x12u, nf->usage_id);
-				write_s32(out.data + eo + 0x1Cu, -1);
-			}
-		}
 
 		/* 3. Append newly placed objects whose tags exist natively in base_map */
 		for (i = 0; i < edits->placed_object_count; i++)

@@ -800,6 +800,7 @@ void network_chat_update(void)
 		g_forge.grabbed_live_index = -1;
 		g_forge.grabbed_object_index = NONE;
 		g_forge.hovered_object_index = NONE;
+		g_forge.hovered_live_index = -1;
 		g_forge.hovered_object_label[0] = 0;
 		g_forge.live_instance_count = 0;
 		g_forge.has_saved_map_once = 0;
