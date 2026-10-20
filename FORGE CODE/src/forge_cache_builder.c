@@ -2939,6 +2939,7 @@ int forge_export_scenario_map(
 
 #undef _mkdir
 #undef mkdir
+	FORGE_MKDIR("forge_maps");
 	FORGE_MKDIR(output_dir);
 
 	/* Ensure we open a Custom Edition (v609) base map container so custom_maps/ always receives a valid v609 cache */
@@ -3180,10 +3181,14 @@ int forge_export_scenario_map(
 
 	write_s32(out.data + 0x04u, CACHE_VERSION_CE);
 	write_u32(out.data + 0x08u, out.size);
+	write_u32(out.data + 0x0Cu, 0);
 	write_u32(out.data + 0x10u, base_map.tag_data_offset);
 	write_u32(out.data + 0x14u, out.size - base_map.tag_data_offset);
 	memset(out.data + 0x20u, 0, 32);
 	snprintf((char *)(out.data + 0x20u), 32, "%s", output_map_name);
+	write_s16(out.data + 0x60u, 1); /* _scenario_type_multiplayer */
+	if (scnr_foff + 4u <= out.size)
+		write_s16(out.data + scnr_foff + 0x00u, 1);
 	write_u32(out.data + 0x1FCu, 0x464C4731u); /* 'FLG1' OpenCE Forge map signature */
 	write_u32(out.data + 0x7FCu, CACHE_FOOTER_SIGNATURE);
 

@@ -1409,10 +1409,391 @@ def generate_cached_tags_folder(forge_addon_dir: Path) -> None:
                 catalog_lines.append(f"{grp_s}|{cat_id}|{src_id}|{tname}")
 
     (cached_root / "catalog.txt").write_text("\n".join(catalog_lines) + "\n", encoding="utf-8")
+    compile_objective_marker_objs_to_ftags(forge_addon_dir)
     print(
         f"[build_forge] Populated Cached Tag Folder System ({cached_root}) from {len(source_maps)} maps "
         f"with {len(extracted_ftags)} 3D .ftag bundles, {len(shader_bitmaps)} shader bitmap hints & {len(seen_catalog_keys)} catalog entries"
     )
+
+
+def _pack_ftag_parts_from_triangles(
+    verts_pos_norm: list[tuple[float, float, float, float, float, float]],
+    triangles: list[tuple[int, int, int]],
+    shader_hint: str = "forge\\marker_translucent",
+    max_tris_per_part: int = 4800,
+) -> list[tuple[int, int, bytes, bytes, bytes]]:
+    parts_out: list[tuple[int, int, bytes, bytes, bytes]] = []
+    sh_bytes = shader_hint.encode("ascii", errors="ignore")[:127].ljust(128, b"\x00")
+
+    for start in range(0, len(triangles), max_tris_per_part):
+        batch = triangles[start : start + max_tris_per_part]
+        if not batch:
+            continue
+
+        local_remap: dict[int, int] = {}
+        local_verts = bytearray()
+        local_tris: list[tuple[int, int, int]] = []
+
+        for g0, g1, g2 in batch:
+            for g in (g0, g1, g2):
+                if g not in local_remap:
+                    local_remap[g] = len(local_remap)
+                    x, y, z, nx, ny, nz = verts_pos_norm[g]
+                    if abs(nz) < 0.9:
+                        bx, by, bz = -ny, nx, 0.0
+                    else:
+                        bx, by, bz = 0.0, -nz, ny
+                    bl = (bx * bx + by * by + bz * bz) ** 0.5
+                    if bl > 1e-6:
+                        bx /= bl
+                        by /= bl
+                        bz /= bl
+                    else:
+                        bx, by, bz = 1.0, 0.0, 0.0
+                    tx = ny * bz - nz * by
+                    ty = nz * bx - nx * bz
+                    tz = nx * by - ny * bx
+                    local_verts.extend(
+                        struct.pack(
+                            "<ffffffffffffffhhff",
+                            x, y, z,
+                            nx, ny, nz,
+                            bx, by, bz,
+                            tx, ty, tz,
+                            0.5, 0.5,
+                            0, 0,
+                            1.0, 0.0,
+                        )
+                    )
+            local_tris.append((local_remap[g0], local_remap[g2], local_remap[g1]))
+
+        if not local_tris:
+            continue
+
+        strip: list[int] = []
+        for idx_t, (i0, i1, i2) in enumerate(local_tris):
+            if idx_t == 0:
+                strip.extend((i0, i1, i2))
+            elif (idx_t & 1) == 1:
+                # Odd strip index (5, 15, 25...): D3D reverses triangle strip winding on odd indices,
+                # so swap (i2, i1) to preserve identical front-facing winding for every triangle!
+                prev_last = strip[-1]
+                strip.extend((prev_last, i0, i0, i2, i1))
+            else:
+                prev_last = strip[-1]
+                strip.extend((prev_last, i0, i0, i1, i2))
+
+        if len(strip) < 3 or len(strip) > 32766:
+            continue
+
+        tri_count = len(strip) - 2
+        idx_bytes = struct.pack(f"<{len(strip)}H", *strip)
+        parts_out.append((len(local_remap), tri_count, sh_bytes, bytes(local_verts), idx_bytes))
+
+    return parts_out
+
+
+def _write_ftag_file(
+    out_ftag: Path,
+    grp_str: str,
+    tag_path: str,
+    radius: float,
+    parts_out: list[tuple[int, int, bytes, bytes, bytes]],
+) -> bool:
+    if not parts_out:
+        return False
+    out_ftag.parent.mkdir(parents=True, exist_ok=True)
+    grp_int = (ord(grp_str[0]) << 24) | (ord(grp_str[1]) << 16) | (ord(grp_str[2]) << 8) | ord(grp_str[3])
+    tname_bytes = tag_path.encode("ascii", errors="ignore")[:255].ljust(256, b"\x00")
+    with out_ftag.open("wb") as wf:
+        wf.write(b"FTAG")
+        wf.write(struct.pack("<IIf", 1, grp_int, radius))
+        wf.write(tname_bytes)
+        wf.write(struct.pack("<I", len(parts_out)))
+        for vtx_c, tri_c, sh_b, v_b, i_b in parts_out:
+            wf.write(struct.pack("<ii", vtx_c, tri_c))
+            wf.write(sh_b)
+            wf.write(v_b)
+            wf.write(i_b)
+    return True
+
+
+def _load_and_convert_marker_obj(
+    obj_path: Path,
+    base_span_units: float,
+    decimate_above_y: float | None = None,
+    grid_res: float = 64.0,
+) -> tuple[list[tuple[float, float, float, float, float, float]], list[tuple[int, int, int]]]:
+    vs: list[tuple[float, float, float]] = []
+    vns: list[tuple[float, float, float]] = []
+    fs: list[tuple[int, int, int]] = []
+    f_vns: list[tuple[int, int, int]] = []
+    with obj_path.open("r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            if line.startswith("v "):
+                toks = line.split()
+                if len(toks) >= 4:
+                    vs.append((float(toks[1]), float(toks[2]), float(toks[3])))
+            elif line.startswith("vn "):
+                toks = line.split()
+                if len(toks) >= 4:
+                    vns.append((float(toks[1]), float(toks[2]), float(toks[3])))
+            elif line.startswith("f "):
+                toks = line.split()[1:]
+                if len(toks) >= 3:
+                    v_idxs: list[int] = []
+                    vn_idxs: list[int] = []
+                    for t in toks:
+                        parts = t.split("/")
+                        v_idxs.append(int(parts[0]) - 1)
+                        if len(parts) >= 3 and parts[2]:
+                            vn_idxs.append(int(parts[2]) - 1)
+                        else:
+                            vn_idxs.append(-1)
+                    for i in range(1, len(v_idxs) - 1):
+                        fs.append((v_idxs[0], v_idxs[i], v_idxs[i + 1]))
+                        f_vns.append((vn_idxs[0], vn_idxs[i], vn_idxs[i + 1]))
+
+    if not vs or not fs:
+        return [], []
+
+    min_y = min(v[1] for v in vs)
+    halo_1m = 1.0 / 3.048  # 0.328084 Halo world units = 1.0 meter
+    scale = halo_1m / base_span_units
+
+    if decimate_above_y is None and vns:
+        # Low-poly marker (Player-Spawn, Teleporter-Origin, Teleporter-Destination):
+        # Preserve exact (v_idx, vn_idx) pairs so flat surfaces and sharp edges render cleanly!
+        corner_map: dict[tuple[int, int], int] = {}
+        verts_out_exact: list[tuple[float, float, float, float, float, float]] = []
+        tris_out_exact: list[tuple[int, int, int]] = []
+        for (i0, i1, i2), (n0, n1, n2) in zip(fs, f_vns):
+            p0 = vs[i0]
+            p1 = vs[i1]
+            p2 = vs[i2]
+            xh0, yh0, zh0 = p0[2] * scale, p0[0] * scale, (p0[1] - min_y) * scale + 0.012
+            xh1, yh1, zh1 = p1[2] * scale, p1[0] * scale, (p1[1] - min_y) * scale + 0.012
+            xh2, yh2, zh2 = p2[2] * scale, p2[0] * scale, (p2[1] - min_y) * scale + 0.012
+            ex1, ey1, ez1 = xh1 - xh0, yh1 - yh0, zh1 - zh0
+            ex2, ey2, ez2 = xh2 - xh0, yh2 - yh0, zh2 - zh0
+            fnx = ey1 * ez2 - ez1 * ey2
+            fny = ez1 * ex2 - ex1 * ez2
+            fnz = ex1 * ey2 - ey1 * ex2
+            fnl = (fnx * fnx + fny * fny + fnz * fnz) ** 0.5
+            if fnl < 1e-9:
+                continue
+            fnx /= fnl
+            fny /= fnl
+            fnz /= fnl
+            tri_c: list[int] = []
+            for vi, ni, (xh, yh, zh) in (
+                (i0, n0, (xh0, yh0, zh0)),
+                (i1, n1, (xh1, yh1, zh1)),
+                (i2, n2, (xh2, yh2, zh2)),
+            ):
+                ckey = (vi, ni)
+                ci = corner_map.get(ckey)
+                if ci is None:
+                    ci = len(verts_out_exact)
+                    corner_map[ckey] = ci
+                    if 0 <= ni < len(vns):
+                        nx_o, ny_o, nz_o = vns[ni]
+                        nxh, nyh, nzh = nz_o, nx_o, ny_o
+                        nl = (nxh * nxh + nyh * nyh + nzh * nzh) ** 0.5
+                        if nl > 1e-6:
+                            nxh, nyh, nzh = nxh / nl, nyh / nl, nzh / nl
+                        else:
+                            nxh, nyh, nzh = fnx, fny, fnz
+                    else:
+                        nxh, nyh, nzh = fnx, fny, fnz
+                    verts_out_exact.append((xh, yh, zh, nxh, nyh, nzh))
+                tri_c.append(ci)
+            if tri_c[0] != tri_c[1] and tri_c[1] != tri_c[2] and tri_c[2] != tri_c[0]:
+                tris_out_exact.append((tri_c[0], tri_c[1], tri_c[2]))
+        return verts_out_exact, tris_out_exact
+
+    if decimate_above_y is not None:
+        # Identify connected components so base ring and floating icon never tear at any height boundary
+        parent = list(range(len(vs)))
+
+        def _find(a: int) -> int:
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+
+        for i0, i1, i2 in fs:
+            r0, r1, r2 = _find(i0), _find(i1), _find(i2)
+            parent[r1] = r0
+            parent[r2] = r0
+
+        comp_max_y: dict[int, float] = {}
+        for idx, (_x, y, _z) in enumerate(vs):
+            r = _find(idx)
+            prev_my = comp_max_y.get(r, -1e9)
+            if y > prev_my:
+                comp_max_y[r] = y
+
+        cell_map: dict[tuple[int, int, int, int], int] = {}
+        clustered_vs: list[list[float]] = []
+        v_remap = [0] * len(vs)
+        for idx, (x, y, z) in enumerate(vs):
+            r = _find(idx)
+            if comp_max_y.get(r, 1.0) < 0.25:
+                # Base ring / arrow component: preserve exact vertices without decimation
+                key = (r, round(x * 10000.0), round(y * 10000.0), round(z * 10000.0))
+            else:
+                # High-poly floating icon component: uniform grid clustering within component
+                key = (r, round(x * grid_res), round(y * grid_res), round(z * grid_res))
+            c = cell_map.get(key)
+            if c is None:
+                c = len(clustered_vs)
+                cell_map[key] = c
+                clustered_vs.append([x, y, z, 1.0])
+            else:
+                cv = clustered_vs[c]
+                cv[0] += x
+                cv[1] += y
+                cv[2] += z
+                cv[3] += 1.0
+            v_remap[idx] = c
+
+        vs = [(cv[0] / cv[3], cv[1] / cv[3], cv[2] / cv[3]) for cv in clustered_vs]
+        new_fs: list[tuple[int, int, int]] = []
+        seen_tris: set[tuple[int, int, int]] = set()
+        for i0, i1, i2 in fs:
+            c0, c1, c2 = v_remap[i0], v_remap[i1], v_remap[i2]
+            if c0 == c1 or c1 == c2 or c2 == c0:
+                continue
+            tkey = (c0, c1, c2)
+            if tkey in seen_tris:
+                continue
+            seen_tris.add(tkey)
+            new_fs.append((c0, c1, c2))
+        fs = new_fs
+
+    halo_pos: list[tuple[float, float, float]] = []
+    for x_obj, y_obj, z_obj in vs:
+        xh = z_obj * scale
+        yh = x_obj * scale
+        zh = (y_obj - min_y) * scale + 0.012
+        halo_pos.append((xh, yh, zh))
+
+    norms = [[0.0, 0.0, 0.0] for _ in range(len(halo_pos))]
+    valid_tris: list[tuple[int, int, int]] = []
+    for i0, i1, i2 in fs:
+        x0, y0, z0 = halo_pos[i0]
+        x1, y1, z1 = halo_pos[i1]
+        x2, y2, z2 = halo_pos[i2]
+        ex1, ey1, ez1 = x1 - x0, y1 - y0, z1 - z0
+        ex2, ey2, ez2 = x2 - x0, y2 - y0, z2 - z0
+        nx = ey1 * ez2 - ez1 * ey2
+        ny = ez1 * ex2 - ex1 * ez2
+        nz = ex1 * ey2 - ey1 * ex2
+        if nx * nx + ny * ny + nz * nz < 1e-12:
+            continue
+        valid_tris.append((i0, i1, i2))
+        for vi in (i0, i1, i2):
+            norms[vi][0] += nx
+            norms[vi][1] += ny
+            norms[vi][2] += nz
+
+    verts_out: list[tuple[float, float, float, float, float, float]] = []
+    for idx, (xh, yh, zh) in enumerate(halo_pos):
+        nx, ny, nz = norms[idx]
+        nl = (nx * nx + ny * ny + nz * nz) ** 0.5
+        if nl > 1e-6:
+            nx /= nl
+            ny /= nl
+            nz /= nl
+        else:
+            nx, ny, nz = 0.0, 0.0, 1.0
+        verts_out.append((xh, yh, zh, nx, ny, nz))
+
+    return verts_out, valid_tris
+
+
+def compile_objective_marker_objs_to_ftags(forge_addon_dir: Path) -> None:
+    import math
+    obj_dir = ROOT_DIR / "Forge Objective Markers"
+    markers_out_dir = forge_addon_dir / "cached_tags" / "markers"
+    markers_out_dir.mkdir(parents=True, exist_ok=True)
+    if not obj_dir.is_dir():
+        return
+
+    specs = [
+        ("Player-Spawn.obj", "player_spawn.ftag", "spawn\\player_spawn", 1052.129, None, 64.0),
+        ("Teleporter-Origin.obj", "teleporter_origin.ftag", "teleporter\\origin", 1052.129, None, 64.0),
+        ("Teleporter-Destination.obj", "teleporter_destination.ftag", "teleporter\\destination", 1052.129, None, 64.0),
+        ("Race-Marker.obj", "race_marker.ftag", "objective\\race_track", 1.0, 0.16, 48.0),
+        ("Oddball-Marker.obj", "oddball_marker.ftag", "objective\\oddball_spawn", 1.0, 0.16, 44.0),
+    ]
+
+    spawn_verts: list[tuple[float, float, float, float, float, float]] = []
+    spawn_tris: list[tuple[int, int, int]] = []
+
+    for obj_name, ftag_name, tag_path, span_u, dec_y, g_res in specs:
+        obj_file = obj_dir / obj_name
+        if not obj_file.is_file():
+            continue
+        v_list, t_list = _load_and_convert_marker_obj(obj_file, span_u, dec_y, g_res)
+        if obj_name == "Player-Spawn.obj":
+            spawn_verts = list(v_list)
+            spawn_tris = list(t_list)
+        parts = _pack_ftag_parts_from_triangles(v_list, t_list)
+        if _write_ftag_file(markers_out_dir / ftag_name, "scen", tag_path, 0.45, parts):
+            print(f"[build_forge] Compiled 3D Marker {obj_name} -> markers/{ftag_name} ({len(v_list)} verts, {len(t_list)} tris, {len(parts)} parts)")
+
+    if spawn_verts and spawn_tris:
+        ctf_verts = list(spawn_verts)
+        ctf_tris = list(spawn_tris)
+
+        pole_segs = 12
+        pole_r = 0.0085
+        z_bot, z_top = 0.025, 0.56
+        base_idx = len(ctf_verts)
+        for s in range(pole_segs):
+            ang = s * (2.0 * math.pi / pole_segs)
+            ca, sa = math.cos(ang), math.sin(ang)
+            ctf_verts.append((pole_r * ca, pole_r * sa, z_bot, ca, sa, 0.0))
+            ctf_verts.append((pole_r * ca, pole_r * sa, z_top, ca, sa, 0.0))
+        for s in range(pole_segs):
+            ns = (s + 1) % pole_segs
+            b0, t0 = base_idx + s * 2, base_idx + s * 2 + 1
+            b1, t1 = base_idx + ns * 2, base_idx + ns * 2 + 1
+            ctf_tris.append((b0, b1, t1))
+            ctf_tris.append((b0, t1, t0))
+
+        cols, rows = 10, 6
+        f_x0, f_x1 = 0.0, -0.22
+        f_z0, f_z1 = 0.36, 0.54
+        for side in (1.0, -1.0):
+            grid_base = len(ctf_verts)
+            for r in range(rows + 1):
+                v_frac = r / rows
+                z = f_z0 + v_frac * (f_z1 - f_z0)
+                for c in range(cols + 1):
+                    u_frac = c / cols
+                    x = f_x0 + u_frac * (f_x1 - f_x0)
+                    wave = 0.018 * math.sin(u_frac * math.pi * 1.6) * u_frac
+                    y = wave + side * 0.0025
+                    ctf_verts.append((x, y, z, 0.0, side, 0.0))
+            for r in range(rows):
+                for c in range(cols):
+                    i00 = grid_base + r * (cols + 1) + c
+                    i10 = i00 + 1
+                    i01 = i00 + (cols + 1)
+                    i11 = i01 + 1
+                    if side > 0:
+                        ctf_tris.append((i00, i10, i11))
+                        ctf_tris.append((i00, i11, i01))
+                    else:
+                        ctf_tris.append((i00, i11, i10))
+                        ctf_tris.append((i00, i01, i11))
+
+        ctf_parts = _pack_ftag_parts_from_triangles(ctf_verts, ctf_tris)
+        if _write_ftag_file(markers_out_dir / "ctf_flag_marker.ftag", "scen", "objective\\ctf_flag", 0.60, ctf_parts):
+            print(f"[build_forge] Compiled 3D CTF Flag Marker -> markers/ctf_flag_marker.ftag ({len(ctf_verts)} verts, {len(ctf_tris)} tris)")
 
 
 def build_haloce_forge_exe() -> Path:
@@ -1579,6 +1960,7 @@ def build_haloce_forge_exe() -> Path:
     subprocess.run([
         objcopy,
         "--redefine-sym", "_game_engine_remap_object_definition=_orig_game_engine_remap_object_definition",
+        "--redefine-sym", "_game_engine_post_rasterize_objects=_orig_game_engine_post_rasterize_objects",
         str(game_engine_wrapped),
     ], check=True)
     net_replacements["source/game/game_engine.o"] = game_engine_wrapped
@@ -1602,8 +1984,12 @@ def build_haloce_forge_exe() -> Path:
             subprocess.run([
                 objcopy,
                 "--redefine-sym", "_file_reference_create_from_path=_forge_ce_file_reference_create_from_path",
+                "--redefine-sym", "_halo_windows_fopen=_forge_ce_fopen",
                 "--redefine-sym", "_halo_xbox_fopen=_forge_ce_fopen",
                 "--redefine-sym", "_fopen=_forge_ce_fopen",
+                "--redefine-sym", "_halo_xbox_FindFirstFileA@8=_forge_ce_FindFirstFileA@8",
+                "--redefine-sym", "_halo_xbox_FindNextFileA@8=_forge_ce_FindNextFileA@8",
+                "--redefine-sym", "_halo_xbox_CloseHandle@4=_forge_ce_CloseHandle@4",
                 str(ce_wrapped),
             ], check=True)
             net_replacements[ce_unit] = ce_wrapped

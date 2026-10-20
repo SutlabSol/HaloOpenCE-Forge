@@ -90,6 +90,9 @@ extern void orig_hs_runtime_update(void);
 extern void orig_cinematic_start(void);
 extern boolean orig_scenario_trigger_volume_test_object(short trigger_volume_index, long object_index);
 extern long orig_game_engine_remap_object_definition(long definition_index);
+extern void orig_game_engine_post_rasterize_objects(void);
+extern void rasterizer_models_begin(boolean sky);
+extern void rasterizer_models_end(void);
 extern void orig_menu_tags_loaded(char const *map_name);
 extern void orig_menu_tags_unloaded(void);
 extern boolean orig_pc_menu_event_function_invoke(
@@ -628,17 +631,20 @@ boolean pc_menu_event_function_invoke(
 		}
 	}
 
-	/* Point 5: Forge Single Player -> default to Multiplayer maps only (no Singleplayer campaign maps) */
-	if (g_forge_session_enabled && fn_name && strcmp(fn_name, "initialize sp level list solo") == 0)
+	/* Refresh Custom Edition & saved Forge maps on Single Player level list init, and default Forge SP to Multiplayer maps */
+	if (fn_name && strcmp(fn_name, "initialize sp level list solo") == 0)
 	{
 		boolean res;
 		struct forge_widget_instance *spinner;
 		custom_edition_maps_look_again();
 		res = orig_pc_menu_event_function_invoke(widget_ptr, event_ptr, function_index, widget_deleted);
-		spinner = fw_named(widget, "list_item_0_map_kind_spinner", 0);
-		s_forge_last_map_kind = 1; /* 1 = MAP_KIND_MULTIPLAYER */
-		if (spinner)
-			spinner->parameters.list.selected_index = 1;
+		if (g_forge_session_enabled)
+		{
+			spinner = fw_named(widget, "list_item_0_map_kind_spinner", 0);
+			s_forge_last_map_kind = 1; /* 1 = MAP_KIND_MULTIPLAYER */
+			if (spinner)
+				spinner->parameters.list.selected_index = 1;
+		}
 		return res;
 	}
 
@@ -915,13 +921,31 @@ void first_person_weapon_draw(void)
 		g_forge.mode != _forge_mode_play &&
 		main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") != 0)
 	{
-		/* Point 12: Render the 3D Spawn Palette Preview at the first-person weapon stage
-		 * (after sky, BSP, and opaque objects have been drawn) so it renders with proper depth and lighting! */
-		forge_render_world_3d_overlays(NULL);
 		/* Hide player's first-person hands & weapon model when in Forge Mode */
 		return;
 	}
 	orig_first_person_weapon_draw();
+}
+
+extern void rasterizer_set_stencil_mode(long stencil_mode);
+extern void rasterizer_set_frustum_z(real z_near, real z_far);
+
+void game_engine_post_rasterize_objects(void)
+{
+	orig_game_engine_post_rasterize_objects();
+
+	if (g_forge_session_enabled && g_forge.initialized &&
+		main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") != 0)
+	{
+		/* Render 3D Translucent Objective/Spawn/Teleporter Markers and 3D Spawn Menu Preview
+		 * AFTER sky, opaque objects, BSP lightmaps, BSP diffuse textures, and fog have been drawn!
+		 * Reset stencil mode to NONE and restore camera frustum constants so world markers never get rejected! */
+		rasterizer_set_stencil_mode(0);
+		rasterizer_set_frustum_z(0.0f, 0.0f);
+		rasterizer_models_begin(FALSE);
+		forge_render_world_3d_overlays(NULL);
+		rasterizer_models_end();
+	}
 }
 
 void hud_render_weapon_interface(struct player_datum *player)
@@ -1094,6 +1118,13 @@ static void *s_pause_alloc_instances = NULL;
 void menu_tags_unloaded(void)
 {
 	forge_runtime_on_map_unload();
+	g_last_forge_map_name[0] = 0;
+	g_forge.monitor_cam_initialized = 0;
+	g_forge.live_instance_count = 0;
+	g_forge.grabbed_live_index = -1;
+	g_forge.grabbed_object_index = NONE;
+	g_forge.hovered_live_index = -1;
+	g_forge.hovered_object_index = NONE;
 	if (s_pause_saved_instances)
 	{
 		cache_files_set_tag_instances(s_pause_saved_instances, s_pause_saved_count);
@@ -1111,6 +1142,14 @@ void menu_tags_unloaded(void)
 void menu_tags_loaded(char const *map_name)
 {
 	orig_menu_tags_loaded(map_name);
+
+	g_last_forge_map_name[0] = 0;
+	g_forge.monitor_cam_initialized = 0;
+	g_forge.live_instance_count = 0;
+	g_forge.grabbed_live_index = -1;
+	g_forge.grabbed_object_index = NONE;
+	g_forge.hovered_live_index = -1;
+	g_forge.hovered_object_index = NONE;
 
 	/* Patch "SAVE FORGE MAP" button into the in-game Escape Pause Menu when in a Forge session */
 	if (g_forge_session_enabled && map_name && strcmp(map_name, "ui") != 0)
@@ -1277,27 +1316,58 @@ void menu_tags_loaded(char const *map_name)
 /* ---------- Point 11: Redirect custom_maps\<name>.(map|bmp|txt) to forge_maps\<name>\<name>.(map|bmp|txt) */
 
 extern void *file_reference_create_from_path(void *reference, char const *full_path, boolean is_directory);
+extern FILE *halo_windows_fopen(char const *filename, char const *mode);
 
 static char const *resolve_forge_maps_redirect_path(char const *path, char *out_buf, size_t out_sz)
 {
-	char const *leaf;
+	char const *leaf = NULL;
 	char const *dot;
 	char sub_dir[64];
+	char disk_check[512];
 	size_t base_len;
+	int has_d = 0;
 	FILE *tf;
 
 	if (!path || !path[0])
 		return path;
-	if (_strnicmp(path, "custom_maps\\", 12) != 0 && _strnicmp(path, "custom_maps/", 12) != 0)
+
+	if (_strnicmp(path, "d:\\custom_maps\\", 15) == 0 || _strnicmp(path, "d:/custom_maps/", 15) == 0)
+	{
+		has_d = 1;
+		leaf = path + 15;
+	}
+	else if (_strnicmp(path, "custom_maps\\", 12) == 0 || _strnicmp(path, "custom_maps/", 12) == 0)
+	{
+		has_d = 0;
+		leaf = path + 12;
+	}
+	else
+	{
+		return path;
+	}
+
+	if (strchr(leaf, '\\') != NULL || strchr(leaf, '/') != NULL)
 		return path;
 
-	leaf = path + 12;
 	if (_stricmp(leaf, "bitmaps.map") == 0 ||
 		_stricmp(leaf, "sounds.map") == 0 ||
-		_stricmp(leaf, "loc.map") == 0 ||
-		strchr(leaf, '\\') != NULL ||
-		strchr(leaf, '/') != NULL)
+		_stricmp(leaf, "loc.map") == 0)
 	{
+		snprintf(disk_check, sizeof(disk_check), "custom_maps\\%s", leaf);
+		tf = fopen(disk_check, "rb");
+		if (tf)
+		{
+			fclose(tf);
+			return path;
+		}
+		snprintf(disk_check, sizeof(disk_check), "OpenCE Forge\\forge_maps\\%s", leaf);
+		tf = fopen(disk_check, "rb");
+		if (tf)
+		{
+			fclose(tf);
+			snprintf(out_buf, out_sz, "%sOpenCE Forge\\forge_maps\\%s", has_d ? "d:\\" : "", leaf);
+			return out_buf;
+		}
 		return path;
 	}
 
@@ -1309,11 +1379,12 @@ static char const *resolve_forge_maps_redirect_path(char const *path, char *out_
 	memcpy(sub_dir, leaf, base_len);
 	sub_dir[base_len] = '\0';
 
-	snprintf(out_buf, out_sz, "forge_maps\\%s\\%s", sub_dir, leaf);
-	tf = fopen(out_buf, "rb");
+	snprintf(disk_check, sizeof(disk_check), "forge_maps\\%s\\%s", sub_dir, leaf);
+	tf = fopen(disk_check, "rb");
 	if (tf)
 	{
 		fclose(tf);
+		snprintf(out_buf, out_sz, "%sforge_maps\\%s\\%s", has_d ? "d:\\" : "", sub_dir, leaf);
 		return out_buf;
 	}
 	return path;
@@ -1330,7 +1401,117 @@ FILE *forge_ce_fopen(char const *filename, char const *mode)
 {
 	char redirected[512];
 	char const *actual = resolve_forge_maps_redirect_path(filename, redirected, sizeof(redirected));
-	return fopen(actual, mode);
+	return halo_windows_fopen(actual, mode);
 }
+
+#define FORGE_CE_FIND_SENTINEL_HANDLE ((HANDLE)(uintptr_t)0x7F046E01u)
+
+static struct
+{
+	boolean in_use;
+	HANDLE primary_handle;
+	HANDLE forge_dirs_handle;
+} s_forge_ce_find = { FALSE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE };
+
+static BOOL forge_ce_advance_forge_dirs(LPWIN32_FIND_DATAA data)
+{
+	WIN32_FIND_DATAA dir_data;
+	BOOL got_entry;
+
+	if (s_forge_ce_find.forge_dirs_handle == INVALID_HANDLE_VALUE)
+	{
+		s_forge_ce_find.forge_dirs_handle = FindFirstFileA("d:\\forge_maps\\*.*", &dir_data);
+		if (s_forge_ce_find.forge_dirs_handle == INVALID_HANDLE_VALUE)
+			return FALSE;
+		got_entry = TRUE;
+	}
+	else
+	{
+		got_entry = FindNextFileA(s_forge_ce_find.forge_dirs_handle, &dir_data);
+	}
+
+	while (got_entry)
+	{
+		if ((dir_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+			dir_data.cFileName[0] != '.' &&
+			strlen(dir_data.cFileName) > 0 &&
+			strlen(dir_data.cFileName) < 64)
+		{
+			char map_check[512];
+			FILE *tf;
+			snprintf(map_check, sizeof(map_check), "forge_maps\\%s\\%s.map", dir_data.cFileName, dir_data.cFileName);
+			tf = fopen(map_check, "rb");
+			if (tf)
+			{
+				fclose(tf);
+				memset(data, 0, sizeof(*data));
+				data->dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
+				snprintf(data->cFileName, sizeof(data->cFileName), "%s.map", dir_data.cFileName);
+				return TRUE;
+			}
+		}
+		got_entry = FindNextFileA(s_forge_ce_find.forge_dirs_handle, &dir_data);
+	}
+
+	CloseHandle(s_forge_ce_find.forge_dirs_handle);
+	s_forge_ce_find.forge_dirs_handle = INVALID_HANDLE_VALUE;
+	return FALSE;
+}
+
+HANDLE WINAPI forge_ce_FindFirstFileA(LPCSTR file_name, LPWIN32_FIND_DATAA data)
+{
+	if (!s_forge_ce_find.in_use && file_name &&
+		(_stricmp(file_name, "d:\\custom_maps\\*.*") == 0 ||
+		 _stricmp(file_name, "custom_maps\\*.*") == 0))
+	{
+		s_forge_ce_find.in_use = TRUE;
+		s_forge_ce_find.primary_handle = FindFirstFileA(file_name, data);
+		s_forge_ce_find.forge_dirs_handle = INVALID_HANDLE_VALUE;
+		if (s_forge_ce_find.primary_handle != INVALID_HANDLE_VALUE)
+			return FORGE_CE_FIND_SENTINEL_HANDLE;
+		if (forge_ce_advance_forge_dirs(data))
+			return FORGE_CE_FIND_SENTINEL_HANDLE;
+		s_forge_ce_find.in_use = FALSE;
+		return INVALID_HANDLE_VALUE;
+	}
+	return FindFirstFileA(file_name, data);
+}
+
+BOOL WINAPI forge_ce_FindNextFileA(HANDLE find_file, LPWIN32_FIND_DATAA data)
+{
+	if (find_file == FORGE_CE_FIND_SENTINEL_HANDLE)
+	{
+		if (s_forge_ce_find.primary_handle != INVALID_HANDLE_VALUE)
+		{
+			if (FindNextFileA(s_forge_ce_find.primary_handle, data))
+				return TRUE;
+			CloseHandle(s_forge_ce_find.primary_handle);
+			s_forge_ce_find.primary_handle = INVALID_HANDLE_VALUE;
+		}
+		return forge_ce_advance_forge_dirs(data);
+	}
+	return FindNextFileA(find_file, data);
+}
+
+BOOL WINAPI forge_ce_CloseHandle(HANDLE hObject)
+{
+	if (hObject == FORGE_CE_FIND_SENTINEL_HANDLE)
+	{
+		if (s_forge_ce_find.primary_handle != INVALID_HANDLE_VALUE)
+		{
+			CloseHandle(s_forge_ce_find.primary_handle);
+			s_forge_ce_find.primary_handle = INVALID_HANDLE_VALUE;
+		}
+		if (s_forge_ce_find.forge_dirs_handle != INVALID_HANDLE_VALUE)
+		{
+			CloseHandle(s_forge_ce_find.forge_dirs_handle);
+			s_forge_ce_find.forge_dirs_handle = INVALID_HANDLE_VALUE;
+		}
+		s_forge_ce_find.in_use = FALSE;
+		return TRUE;
+	}
+	return CloseHandle(hObject);
+}
+
 
 

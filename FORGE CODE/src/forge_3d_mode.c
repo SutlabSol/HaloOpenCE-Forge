@@ -1094,7 +1094,41 @@ int32_t forge_3d_spawn_object_at(
 			strstr(tag_path, "oddball") ? 2 :
 			strstr(tag_path, "koth") ? 8 :
 			strstr(tag_path, "race") ? 3 : 0;
-		inst->team_designator = strstr(tag_path, "blue") ? 1 : 0;
+		if (inst->netgame_flag_type == 0)
+		{
+			inst->team_designator = strstr(tag_path, "blue") ? 1 : 0;
+		}
+		else if (inst->netgame_flag_type == 2 && team_designator == 0)
+		{
+			/* Auto-assign next unused Oddball spawn ID (0..15) so multiple ball spawns each have a valid ID */
+			int cand, j, used;
+			int16_t chosen_id = 0;
+			for (cand = 0; cand < 16; cand++)
+			{
+				used = 0;
+				for (j = 0; j < live_idx; j++)
+				{
+					if (g_forge.live_instances[j].active &&
+						g_forge.live_instances[j].group_tag == 'flag' &&
+						g_forge.live_instances[j].netgame_flag_type == 2 &&
+						g_forge.live_instances[j].team_designator == cand)
+					{
+						used = 1;
+						break;
+					}
+				}
+				if (!used)
+				{
+					chosen_id = (int16_t)cand;
+					break;
+				}
+			}
+			inst->team_designator = chosen_id;
+		}
+		else
+		{
+			inst->team_designator = (team_designator >= 0) ? team_designator : 0;
+		}
 		sync_live_netgame_flags_to_scenario();
 		forge_set_status("Placed Objective '%s' [Ref/Team #%d] at (%.1f, %.1f, %.1f)",
 			tag_path, (int)inst->team_designator, x, y, z);
@@ -1706,6 +1740,8 @@ void forge_3d_update(float dt)
 	static int prev_f1, prev_f2, prev_f4, prev_f5, prev_f6, prev_f8, prev_esc, prev_x, prev_bk, prev_lmb;
 	static int prev_up, prev_down, prev_left, prev_right, prev_enter, prev_g, prev_z, prev_f, prev_del;
 	static int s_init_wait_ticks = 0;
+	static struct scenario *s_last_scen = NULL;
+	struct scenario *scen;
 	int cur_f1, cur_f2, cur_f4, cur_f5, cur_f6, cur_f8, cur_esc, cur_x, cur_bk, cur_lmb;
 	int cur_up, cur_down, cur_left, cur_right, cur_enter, cur_g, cur_z, cur_f, cur_del;
 
@@ -1716,6 +1752,16 @@ void forge_3d_update(float dt)
 		return;
 	if (main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") == 0)
 		return;
+	scen = global_scenario_get();
+	if (!scen || scen->type == 2 /* _scenario_type_main_menu */)
+		return;
+	if (scen != s_last_scen)
+	{
+		s_last_scen = scen;
+		s_init_wait_ticks = 0;
+		g_forge.monitor_cam_initialized = 0;
+		g_forge.live_instance_count = 0;
+	}
 
 	/* Point 4: When starting a game, spawn as the Spartan at a default player spawn point */
 	if (!g_forge.monitor_cam_initialized)
@@ -1772,6 +1818,11 @@ void forge_3d_update(float dt)
 		{
 			return;
 		}
+	}
+	else if (g_forge.live_instance_count == 0 && (scen->players.count > 0 || scen->netgame_flags.count > 0))
+	{
+		forge_init_map_scenario_entities();
+		forge_load_saved_map_state_if_present(main_get_map_name());
 	}
 
 	/* Ensure any vehicle driven by a player has powered seat_power[0] = 1.0f so flyers/hovercraft thrust works */
@@ -2088,14 +2139,72 @@ void forge_3d_update(float dt)
 				float sx = g_forge.ray_hit_valid ? g_forge.ray_hit_x : (g_forge.cam_x + (float)cos((double)g_forge.cam_yaw) * 4.0f);
 				float sy = g_forge.ray_hit_valid ? g_forge.ray_hit_y : (g_forge.cam_y + (float)sin((double)g_forge.cam_yaw) * 4.0f);
 				float sz = g_forge.ray_hit_valid ? (g_forge.ray_hit_z + 0.15f) : g_forge.cam_z;
-				int32_t spawned_idx = forge_3d_spawn_object_at(
-					ce->group_tag,
-					ce->tag_path,
-					ce->source_cache_id,
-					sx, sy, sz,
-					g_forge.cam_yaw, 0.0f, 0.0f,
-					0,
-					1);
+				int32_t spawned_idx = -1;
+
+				g_forge.koth_group_placing = 0;
+
+				/* Item 4: Spawning [KOTH] Hill Marker drops a 4m diameter circle made of 10 linked points! */
+				if (ce->group_tag == 'flag' && strstr(ce->tag_path, "koth") != NULL)
+				{
+					int cand_id, j, k, used;
+					int16_t hill_id = 0;
+					float r_init = 2.0f * (1.0f / 3.048f); /* 2.0m radius = 4.0m diameter in Halo world units */
+
+					for (cand_id = 0; cand_id < 16; cand_id++)
+					{
+						used = 0;
+						for (j = 0; j < g_forge.live_instance_count; j++)
+						{
+							if (g_forge.live_instances[j].active &&
+								g_forge.live_instances[j].group_tag == 'flag' &&
+								g_forge.live_instances[j].netgame_flag_type == 8 &&
+								g_forge.live_instances[j].team_designator == cand_id)
+							{
+								used = 1;
+								break;
+							}
+						}
+						if (!used)
+						{
+							hill_id = (int16_t)cand_id;
+							break;
+						}
+					}
+
+					g_forge.koth_group_hill_id = hill_id;
+					g_forge.koth_group_radius = r_init;
+					for (k = 0; k < 10; k++)
+					{
+						float ang = (float)k * (6.283185307f / 10.0f);
+						float nx = sx + r_init * (float)cos((double)ang);
+						float ny = sy + r_init * (float)sin((double)ang);
+						int32_t nidx = forge_3d_spawn_object_at(
+							ce->group_tag,
+							ce->tag_path,
+							ce->source_cache_id,
+							nx, ny, sz,
+							ang, 0.0f, 0.0f,
+							hill_id,
+							1);
+						g_forge.koth_group_live_indices[k] = nidx;
+						if (k == 0)
+							spawned_idx = nidx;
+					}
+					if (spawned_idx >= 0)
+						g_forge.koth_group_placing = 1;
+				}
+				else
+				{
+					spawned_idx = forge_3d_spawn_object_at(
+						ce->group_tag,
+						ce->tag_path,
+						ce->source_cache_id,
+						sx, sy, sz,
+						g_forge.cam_yaw, 0.0f, 0.0f,
+						0,
+						1);
+				}
+
 				/* Hitting Enter confirms the previewed item and attaches it to the placement beam */
 				if (!(GetAsyncKeyState(VK_SHIFT) & 0x8000))
 				{
@@ -2108,8 +2217,16 @@ void forge_3d_update(float dt)
 						g_forge.grab_yaw = g_forge.cam_yaw;
 						g_forge.grab_pitch = 0.0f;
 						g_forge.grab_roll = 0.0f;
-						forge_set_status("Placing '%s' [Scroll 1-30m / Hold Z+Click Floor / R Rotate / Click Place]",
-							ce->display_name);
+						if (g_forge.koth_group_placing)
+						{
+							forge_set_status("Placing 10-Pt KOTH Hill #%d (4.0m Dia) [Hold C/Shift+Scroll Radius / Hold Z Floor / Click Place]",
+								g_forge.koth_group_hill_id);
+						}
+						else
+						{
+							forge_set_status("Placing '%s' [Scroll 1-30m / Hold Z+Click Floor / R Rotate / Click Place]",
+								ce->display_name);
+						}
 					}
 				}
 				/* Prevent this same Enter press from immediately dropping the newly spawned item */
@@ -2572,7 +2689,16 @@ void forge_3d_update(float dt)
 						robj->object.translational_velocity.k = -0.02f;
 					}
 				}
-				forge_set_status("Confirmed Placement: '%s'", released->tag_path);
+				if (g_forge.koth_group_placing)
+				{
+					forge_set_status("Placed 10-Node KOTH Hill #%d! Grab individual nodes to fine-tune hill shape.",
+						g_forge.koth_group_hill_id);
+					g_forge.koth_group_placing = 0;
+				}
+				else
+				{
+					forge_set_status("Confirmed Placement: '%s'", released->tag_path);
+				}
 				g_forge.grabbed_live_index = -1;
 				g_forge.grabbed_object_index = NONE;
 			}
@@ -2666,6 +2792,7 @@ void forge_3d_update(float dt)
 					dx = inst->x - g_forge.cam_x;
 					dy = inst->y - g_forge.cam_y;
 					dz = inst->z - g_forge.cam_z;
+					g_forge.koth_group_placing = 0;
 					g_forge.grabbed_live_index = best;
 					g_forge.grabbed_object_index = inst->object_index;
 					g_forge.grab_distance = (float)sqrt((double)(dx * dx + dy * dy + dz * dz));
@@ -2685,11 +2812,38 @@ void forge_3d_update(float dt)
 		{
 			float tx, ty, tz, syaw, spitch, sroll;
 			int wheel_notches = 0;
+			int radius_mod_held = ((GetAsyncKeyState('C') & 0x8000) || (GetAsyncKeyState(VK_SHIFT) & 0x8000)) != 0;
 
-			/* Point 3: Scroll wheel moves held item away and towards camera (closest 1m, furthest 30m) */
+			/* Point 3 & Item 4: Scroll wheel moves held item away/towards camera, OR scales KOTH Hill radius when C or Shift is held! */
 			platform_scoreboard_scroll(1, &wheel_notches, NULL);
-			if (wheel_notches != 0)
+			if (g_forge.koth_group_placing && radius_mod_held && wheel_notches != 0)
+			{
+				g_forge.koth_group_radius += (float)wheel_notches * (0.25f / 3.048f);
+				if (g_forge.koth_group_radius < (0.4f / 3.048f)) g_forge.koth_group_radius = (0.4f / 3.048f);
+				if (g_forge.koth_group_radius > (15.0f / 3.048f)) g_forge.koth_group_radius = (15.0f / 3.048f);
+				forge_set_status("KOTH Hill #%d Diameter: %.1fm (Radius: %.2fm) [Hold C/Shift+Scroll / Click Place]",
+					g_forge.koth_group_hill_id,
+					g_forge.koth_group_radius * 2.0f * 3.048f,
+					g_forge.koth_group_radius * 3.048f);
+			}
+			else if (wheel_notches != 0)
+			{
 				g_forge.grab_distance += (float)wheel_notches * 1.0f;
+			}
+
+			if (g_forge.koth_group_placing)
+			{
+				if ((GetAsyncKeyState(VK_OEM_PLUS) & 0x8000) || (GetAsyncKeyState(VK_OEM_6) & 0x8000))
+				{
+					g_forge.koth_group_radius += (1.5f / 3.048f) * dt;
+					if (g_forge.koth_group_radius > (15.0f / 3.048f)) g_forge.koth_group_radius = (15.0f / 3.048f);
+				}
+				if ((GetAsyncKeyState(VK_OEM_MINUS) & 0x8000) || (GetAsyncKeyState(VK_OEM_4) & 0x8000))
+				{
+					g_forge.koth_group_radius -= (1.5f / 3.048f) * dt;
+					if (g_forge.koth_group_radius < (0.4f / 3.048f)) g_forge.koth_group_radius = (0.4f / 3.048f);
+				}
+			}
 
 			if (GetAsyncKeyState(VK_PRIOR) & 0x8000) g_forge.grab_distance += 8.0f * dt;
 			if (GetAsyncKeyState(VK_NEXT) & 0x8000) g_forge.grab_distance -= 8.0f * dt;
@@ -2730,7 +2884,44 @@ void forge_3d_update(float dt)
 			syaw = snap_angle_rad(g_forge.grab_yaw, g_forge.snap_mode);
 			spitch = snap_angle_rad(g_forge.grab_pitch, g_forge.snap_mode);
 			sroll = snap_angle_rad(g_forge.grab_roll, g_forge.snap_mode);
-			forge_3d_move_instance(g_forge.grabbed_live_index, tx, ty, tz, syaw, spitch, sroll, 1);
+
+			if (g_forge.koth_group_placing)
+			{
+				int k;
+				for (k = 0; k < 10; k++)
+				{
+					int32_t nidx = g_forge.koth_group_live_indices[k];
+					float ang = syaw + (float)k * (6.283185307f / 10.0f);
+					float nx = tx + g_forge.koth_group_radius * (float)cos((double)ang);
+					float ny = ty + g_forge.koth_group_radius * (float)sin((double)ang);
+					float nz = tz;
+					if (cur_z)
+					{
+						real_point3d n_orig;
+						real_vector3d n_vec;
+						struct collision_result ncoll;
+						n_orig.x = nx;
+						n_orig.y = ny;
+						n_orig.z = tz + 2.0f;
+						n_vec.i = 0.0f;
+						n_vec.j = 0.0f;
+						n_vec.k = -200.0f;
+						memset(&ncoll, 0, sizeof(ncoll));
+						if (collision_test_vector(
+							FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
+							&n_orig, &n_vec, NONE, &ncoll))
+						{
+							nz = ncoll.point.z + 0.04f;
+						}
+					}
+					if (nidx >= 0 && nidx < g_forge.live_instance_count)
+						forge_3d_move_instance(nidx, nx, ny, nz, ang, 0.0f, 0.0f, 1);
+				}
+			}
+			else
+			{
+				forge_3d_move_instance(g_forge.grabbed_live_index, tx, ty, tz, syaw, spitch, sroll, 1);
+			}
 		}
 		else
 		{
@@ -2740,7 +2931,21 @@ void forge_3d_update(float dt)
 		/* Delete Grabbed Object */
 		if (cur_del && !prev_del && g_forge.grabbed_live_index >= 0)
 		{
-			forge_3d_delete_instance(g_forge.grabbed_live_index, 1);
+			if (g_forge.koth_group_placing)
+			{
+				int k;
+				for (k = 0; k < 10; k++)
+				{
+					int32_t nidx = g_forge.koth_group_live_indices[k];
+					if (nidx >= 0 && nidx < g_forge.live_instance_count)
+						forge_3d_delete_instance(nidx, 1);
+				}
+				g_forge.koth_group_placing = 0;
+			}
+			else
+			{
+				forge_3d_delete_instance(g_forge.grabbed_live_index, 1);
+			}
 			g_forge.grabbed_live_index = -1;
 			g_forge.grabbed_object_index = NONE;
 		}
@@ -2989,12 +3194,117 @@ static void draw_teleporter_and_objective_markers(
 {
 	struct forge_ui_area_style const *mst = &s_ui_theme.areas[_forge_ui_area_markers];
 	int i;
+
+	/* Player Spawns, Teleporter Origin/Destination, Race Markers, Oddball Markers,
+	 * and CTF Flags now render as true 3D translucent world models in
+	 * render_world_objective_and_spawn_markers() (forge_runtime_tags.c).
+	 * In 2D HUD space we only draw floating text labels while in Forge Mode
+	 * (and the 2D ground ring for KOTH Hill boundary points). */
+	if (g_forge.mode != _forge_mode_3d_monitor)
+		return;
+
+	/* Item 4: Draw connected KOTH Hill boundary polygon rings for each active hill_id (0..15) */
+	{
+		int hill_id;
+		for (hill_id = 0; hill_id < 16; hill_id++)
+		{
+			int node_indices[32];
+			float node_angles[32];
+			int ncount = 0;
+			int hill_hi = (g_forge.koth_group_placing && g_forge.koth_group_hill_id == hill_id) ? 1 : 0;
+			float cx_h = 0.0f, cy_h = 0.0f, cz_h = 0.0f;
+			int a, b;
+
+			for (i = 0; i < g_forge.live_instance_count && ncount < 32; i++)
+			{
+				struct forge_live_instance const *inst = &g_forge.live_instances[i];
+				if (!inst->active || inst->group_tag != 'flag')
+					continue;
+				if (inst->netgame_flag_type != _netgame_flag_hill && strstr(inst->tag_path, "koth") == NULL)
+					continue;
+				if (inst->team_designator != hill_id)
+					continue;
+				node_indices[ncount++] = i;
+				cx_h += inst->x;
+				cy_h += inst->y;
+				cz_h += inst->z;
+				if (i == g_forge.grabbed_live_index || i == g_forge.hovered_live_index)
+					hill_hi = 1;
+			}
+
+			if (ncount >= 2)
+			{
+				float dx_c, dy_c, dz_c;
+				cx_h /= (float)ncount;
+				cy_h /= (float)ncount;
+				cz_h /= (float)ncount;
+				dx_c = cx_h - render.camera.position.x;
+				dy_c = cy_h - render.camera.position.y;
+				dz_c = cz_h - render.camera.position.z;
+				if (dx_c * dx_c + dy_c * dy_c + dz_c * dz_c <= 80.0f * 80.0f || hill_hi)
+				{
+					uint32_t col_top = hill_hi ? 0xFFFFE868u : 0xD8FFC028u;
+					uint32_t col_bot = hill_hi ? 0xFFFFC838u : 0xB8E09818u;
+					uint32_t col_dark = 0xA0281804u;
+					short ht = hill_hi ? 2 : 1;
+
+					for (a = 0; a < ncount; a++)
+					{
+						struct forge_live_instance const *na = &g_forge.live_instances[node_indices[a]];
+						node_angles[a] = (float)atan2((double)(na->y - cy_h), (double)(na->x - cx_h));
+					}
+					for (a = 0; a < ncount - 1; a++)
+					{
+						for (b = a + 1; b < ncount; b++)
+						{
+							if (node_angles[b] < node_angles[a])
+							{
+								float ta = node_angles[a];
+								int ti = node_indices[a];
+								node_angles[a] = node_angles[b];
+								node_indices[a] = node_indices[b];
+								node_angles[b] = ta;
+								node_indices[b] = ti;
+							}
+						}
+					}
+
+					for (a = 0; a < ncount; a++)
+					{
+						int nb = (a + 1) % ncount;
+						struct forge_live_instance const *p0 = &g_forge.live_instances[node_indices[a]];
+						struct forge_live_instance const *p1 = &g_forge.live_instances[node_indices[nb]];
+						short bx0, by0, bx1, by1, tx0, ty0, tx1, ty1;
+						int ok_b0 = project_world_pt_to_window(p0->x, p0->y, p0->z + 0.03f, window_x0, window_y0, &bx0, &by0);
+						int ok_b1 = project_world_pt_to_window(p1->x, p1->y, p1->z + 0.03f, window_x0, window_y0, &bx1, &by1);
+						int ok_t0 = project_world_pt_to_window(p0->x, p0->y, p0->z + 0.24f, window_x0, window_y0, &tx0, &ty0);
+						int ok_t1 = project_world_pt_to_window(p1->x, p1->y, p1->z + 0.24f, window_x0, window_y0, &tx1, &ty1);
+
+						if (ok_b0 && ok_b1)
+						{
+							draw_screen_line_thick(bx0, by0, bx1, by1, (short)(ht + 1), col_dark, window_x0, window_y0, window_x1, window_y1);
+							draw_screen_line_thick(bx0, by0, bx1, by1, ht, col_bot, window_x0, window_y0, window_x1, window_y1);
+						}
+						if (ok_t0 && ok_t1)
+						{
+							draw_screen_line_thick(tx0, ty0, tx1, ty1, ht, col_top, window_x0, window_y0, window_x1, window_y1);
+						}
+						if (ok_b0 && ok_t0)
+						{
+							draw_screen_line_thick(bx0, by0, tx0, ty0, 1, col_bot, window_x0, window_y0, window_x1, window_y1);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	/* Item 2: Only show floating marker names when the pickup reticle is over the item (or holding it) */
 	for (i = 0; i < g_forge.live_instance_count; i++)
 	{
 		struct forge_live_instance const *inst = &g_forge.live_instances[i];
 		union real_point3d wpt;
 		union real_point2d spt;
-		float dx_cam, dy_cam, dz_cam, cam_d2;
 		int is_hi;
 		short sx, sy;
 
@@ -3003,73 +3313,41 @@ static void draw_teleporter_and_objective_markers(
 		if (inst->group_tag != 'spwn' && inst->group_tag != 'tele' && inst->group_tag != 'flag')
 			continue;
 
-		dx_cam = inst->x - render.camera.position.x;
-		dy_cam = inst->y - render.camera.position.y;
-		dz_cam = inst->z - render.camera.position.z;
-		cam_d2 = dx_cam * dx_cam + dy_cam * dy_cam + dz_cam * dz_cam;
 		is_hi = (i == g_forge.grabbed_live_index || i == g_forge.hovered_live_index);
-
-		/* Distance cull markers beyond 65 world units so distant horizon stays crisp */
-		if (cam_d2 > 65.0f * 65.0f && !is_hi)
+		if (!is_hi)
 			continue;
 
 		if (inst->group_tag == 'spwn')
 		{
-			/* Requirement 1: Player spawns appear as a circle on the ground with an arrow pointing
-			 * in the direction the player will spawn facing, coloured to match the team colour:
-			 *   FFA spawns - Yellow
-			 *   Red team   - Red
-			 *   Blue team  - Blue */
 			uint32_t ring_col;
-			uint32_t dark_col;
 			char const *team_lbl;
 
 			if (inst->team_designator == 1)
 			{
-				/* Blue Team - Blue */
-				ring_col = is_hi ? 0xFF70B8FFu : 0xFF2888FFu;
-				dark_col = 0xB8041C44u;
+				ring_col = 0xFF70B8FFu;
 				team_lbl = "BLUE SPAWN";
 			}
 			else if (inst->team_designator == 0)
 			{
-				/* Red Team - Red */
-				ring_col = is_hi ? 0xFFFF6868u : 0xFFFF2828u;
-				dark_col = 0xB8440404u;
+				ring_col = 0xFFFF6868u;
 				team_lbl = "RED SPAWN";
 			}
 			else
 			{
-				/* FFA Spawn - Yellow */
-				ring_col = is_hi ? 0xFFFFFF68u : 0xFFFFE018u;
-				dark_col = 0xB8443400u;
+				ring_col = 0xFFFFFF68u;
 				team_lbl = "FFA SPAWN";
 			}
 
-			draw_ground_circle_and_facing_arrow(
-				inst->x, inst->y, inst->z,
-				inst->yaw,
-				0.46f,
-				1,
-				is_hi,
-				ring_col,
-				dark_col,
-				window_x0, window_y0,
-				window_x1, window_y1);
-
-			if (is_hi || (g_forge.mode == _forge_mode_3d_monitor && cam_d2 <= 16.0f * 16.0f))
+			wpt.x = inst->x;
+			wpt.y = inst->y;
+			wpt.z = inst->z + 0.14f;
+			if (render_camera_world_to_screen(&render.camera, &render.frustum, &wpt, &spt))
 			{
-				wpt.x = inst->x;
-				wpt.y = inst->y;
-				wpt.z = inst->z + 0.22f;
-				if (render_camera_world_to_screen(&render.camera, &render.frustum, &wpt, &spt))
+				sx = (short)(window_x0 + (short)(spt.x + 0.5f));
+				sy = (short)(window_y0 + (short)(spt.y + 0.5f));
+				if (sx >= window_x0 + 20 && sx <= window_x1 - 20 && sy >= window_y0 + 10 && sy <= window_y1 - 10)
 				{
-					sx = (short)(window_x0 + (short)(spt.x + 0.5f));
-					sy = (short)(window_y0 + (short)(spt.y + 0.5f));
-					if (sx >= window_x0 + 20 && sx <= window_x1 - 20 && sy >= window_y0 + 10 && sy <= window_y1 - 10)
-					{
-						draw_themed_str(_forge_ui_area_markers, font_index, (short)(sx - 28), (short)(sy + 6), team_lbl, ring_col);
-					}
+					draw_themed_str(_forge_ui_area_markers, font_index, (short)(sx - 28), (short)(sy + 6), team_lbl, ring_col);
 				}
 			}
 			continue;
@@ -3077,8 +3355,7 @@ static void draw_teleporter_and_objective_markers(
 
 		wpt.x = inst->x;
 		wpt.y = inst->y;
-		wpt.z = inst->z + 0.35f;
-		/* Point 7: Fixed 4-argument signature for render_camera_world_to_screen so teleporters never crash! */
+		wpt.z = inst->z + 0.28f;
 		if (!render_camera_world_to_screen(&render.camera, &render.frustum, &wpt, &spt))
 			continue;
 
@@ -3089,119 +3366,47 @@ static void draw_teleporter_and_objective_markers(
 
 		if (inst->group_tag == 'tele')
 		{
-			/* Point 6: Green Square with Arrow UP (Origin / Sender) or Arrow DOWN (Destination / Receiver) + Reference ID */
 			int is_sender = (inst->netgame_flag_type == _netgame_flag_teleporter_source ||
 				strstr(inst->tag_path, "sender") != NULL ||
 				strstr(inst->tag_path, "origin") != NULL);
-			rectangle2d sq, r1, r2, r3;
 			char lbl[64];
 
-			draw_ground_circle_and_facing_arrow(
-				inst->x, inst->y, inst->z,
-				inst->yaw,
-				0.42f,
-				!is_sender,
-				is_hi,
-				0xFF28FF58u,
-				0xB0043410u,
-				window_x0, window_y0,
-				window_x1, window_y1);
-
-			sq.x0 = (short)(sx - 12);
-			sq.y0 = (short)(sy - 12);
-			sq.x1 = (short)(sx + 12);
-			sq.y1 = (short)(sy + 12);
-			draw_quad(&sq, 0xB8083814u);
-			draw_box_border(sq.x0, sq.y0, sq.x1, sq.y1, 2, 0xFF28FF58u);
-
-			/* Vertical arrow shaft */
-			r1.x0 = (short)(sx - 2); r1.y0 = (short)(sy - 7); r1.x1 = (short)(sx + 2); r1.y1 = (short)(sy + 7);
-			draw_quad(&r1, 0xFF40FF70u);
-
-			if (is_sender)
-			{
-				/* UP Arrow Head */
-				r2.x0 = (short)(sx - 5); r2.y0 = (short)(sy - 5); r2.x1 = (short)(sx + 5); r2.y1 = (short)(sy - 2);
-				r3.x0 = (short)(sx - 3); r3.y0 = (short)(sy - 8); r3.x1 = (short)(sx + 3); r3.y1 = (short)(sy - 5);
-			}
-			else
-			{
-				/* DOWN Arrow Head */
-				r2.x0 = (short)(sx - 5); r2.y0 = (short)(sy + 2); r2.x1 = (short)(sx + 5); r2.y1 = (short)(sy + 5);
-				r3.x0 = (short)(sx - 3); r3.y0 = (short)(sy + 5); r3.x1 = (short)(sx + 3); r3.y1 = (short)(sy + 8);
-			}
-			draw_quad(&r2, 0xFF40FF70u);
-			draw_quad(&r3, 0xFF40FF70u);
-
-			snprintf(lbl, sizeof(lbl), "%s #%d", is_sender ? "TELE IN [^]" : "TELE OUT [v]", (int)inst->team_designator);
-			draw_themed_str(_forge_ui_area_markers, font_index, (short)(sx - 34), (short)(sy + 14), lbl, mst->title_color);
+			snprintf(lbl, sizeof(lbl), "%s #%d", is_sender ? "TELE ORIGIN" : "TELE DEST", (int)inst->team_designator);
+			draw_themed_str(_forge_ui_area_markers, font_index, (short)(sx - 34), (short)(sy + 8), lbl, 0xFF70FFA0u);
 		}
 		else if (inst->group_tag == 'flag')
 		{
-			/* Point 5 & Req 2: Visual marker + ground ring for KOTH Hill, Oddball Spawn, CTF Flag, Race Checkpoint */
-			rectangle2d sq;
 			char lbl[64];
 			char const *kind = "OBJECTIVE";
 			uint32_t border_col = 0xFFFFC838u;
-			uint32_t dark_col = 0xB0281C04u;
-			float ring_rad = 0.40f;
-			int show_arrow = 0;
 
 			if (inst->netgame_flag_type == _netgame_flag_hill || strstr(inst->tag_path, "koth"))
 			{
 				kind = "KOTH HILL";
 				border_col = 0xFFFFB828u;
-				ring_rad = 0.28f;
 			}
 			else if (inst->netgame_flag_type == _netgame_flag_oddball_ball_spawn || strstr(inst->tag_path, "oddball"))
 			{
 				kind = "ODDBALL";
-				border_col = 0xFF48E8FFu;
-				dark_col = 0xB0042838u;
+				border_col = 0xFFBC38FFu;
 			}
 			else if (inst->netgame_flag_type == _netgame_flag_ctf_flag ||
 					 inst->netgame_flag_type == _netgame_flag_ctf_vehicle ||
 					 strstr(inst->tag_path, "ctf"))
 			{
 				kind = (inst->team_designator == 1) ? "BLUE FLAG" : "RED FLAG";
-				border_col = (inst->team_designator == 1) ? 0xFF3890FFu : 0xFFFF3838u;
-				dark_col = (inst->team_designator == 1) ? 0xB0041C44u : 0xB0440404u;
-				ring_rad = 0.52f;
-				show_arrow = 1;
+				border_col = (inst->team_designator == 1) ? 0xFF2888FFu : 0xFFFF2828u;
 			}
 			else if (inst->netgame_flag_type == _netgame_flag_race_track ||
 					 inst->netgame_flag_type == _netgame_flag_race_vehicle ||
 					 strstr(inst->tag_path, "race"))
 			{
-				kind = (inst->netgame_flag_type == _netgame_flag_race_vehicle) ? "RACE VEH" : "RACE NODE";
-				border_col = 0xFFE868FFu;
-				dark_col = 0xB02C0838u;
-				show_arrow = 1;
+				kind = (inst->netgame_flag_type == _netgame_flag_race_vehicle) ? "RACE VEH" : "RACE MARKER";
+				border_col = 0xFFFF8C14u;
 			}
 
-			draw_ground_circle_and_facing_arrow(
-				inst->x, inst->y, inst->z,
-				inst->yaw,
-				ring_rad,
-				show_arrow,
-				is_hi,
-				border_col,
-				dark_col,
-				window_x0, window_y0,
-				window_x1, window_y1);
-
-			sq.x0 = (short)(sx - 8);
-			sq.y0 = (short)(sy - 8);
-			sq.x1 = (short)(sx + 8);
-			sq.y1 = (short)(sy + 8);
-			draw_quad(&sq, 0xB0181408u);
-			draw_box_border(sq.x0, sq.y0, sq.x1, sq.y1, 2, border_col);
-
-			if (is_hi || inst->netgame_flag_type != _netgame_flag_hill || cam_d2 <= 22.0f * 22.0f)
-			{
-				snprintf(lbl, sizeof(lbl), "%s #%d", kind, (int)inst->team_designator);
-				draw_themed_str(_forge_ui_area_markers, font_index, (short)(sx - 30), (short)(sy + 11), lbl, border_col);
-			}
+			snprintf(lbl, sizeof(lbl), "%s #%d", kind, (int)inst->team_designator);
+			draw_themed_str(_forge_ui_area_markers, font_index, (short)(sx - 30), (short)(sy + 8), lbl, border_col);
 		}
 	}
 }

@@ -179,6 +179,12 @@ struct forge_runtime_state
 	float ray_hit_x, ray_hit_y, ray_hit_z;
 	int ray_hit_valid;
 
+	/* 10-Point Linked KOTH Hill Circle Placement State */
+	int koth_group_placing;
+	int koth_group_hill_id;
+	float koth_group_radius;
+	int32_t koth_group_live_indices[10];
+
 	/* Mode 1: Top-Down Overhead Camera & Shining Drop Icon State */
 	int overhead_initialized;
 	float bp_center_x, bp_center_y, bp_cam_z;

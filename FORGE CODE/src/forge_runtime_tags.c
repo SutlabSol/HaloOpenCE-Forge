@@ -141,7 +141,9 @@ static void make_short_display_name(char const *tag_path, char const *prefix, ch
 		if (*p == '\\' || *p == '/')
 			leaf = p + 1;
 	}
-	if (prefix && prefix[0])
+	if (prefix && prefix[0] == '[')
+		snprintf(out, out_sz, "%s", prefix);
+	else if (prefix && prefix[0])
 		snprintf(out, out_sz, "%s %s", prefix, leaf);
 	else
 		snprintf(out, out_sz, "%s", leaf);
@@ -354,18 +356,18 @@ void forge_runtime_reload_catalogs(void)
 	g_forge.catalog_count = 0;
 
 	/* Built-in Spawns & Teleporters */
-	add_catalog_entry('spwn', _forge_cat_spawns_teleporters, 0, "spawn\\player_red", "[SPAWN] Red Team");
-	add_catalog_entry('spwn', _forge_cat_spawns_teleporters, 0, "spawn\\player_blue", "[SPAWN] Blue Team");
-	add_catalog_entry('spwn', _forge_cat_spawns_teleporters, 0, "spawn\\player_ffa", "[SPAWN] FFA / Neutral");
+	add_catalog_entry('spwn', _forge_cat_spawns_teleporters, 0, "spawn\\player_red", "[SPAWN] Red Team Spawn");
+	add_catalog_entry('spwn', _forge_cat_spawns_teleporters, 0, "spawn\\player_blue", "[SPAWN] Blue Team Spawn");
+	add_catalog_entry('spwn', _forge_cat_spawns_teleporters, 0, "spawn\\player_ffa", "[SPAWN] FFA / Neutral Spawn");
 	add_catalog_entry('tele', _forge_cat_spawns_teleporters, 0, "teleporter\\origin", "[TELEPORTER] Origin Node");
 	add_catalog_entry('tele', _forge_cat_spawns_teleporters, 0, "teleporter\\destination", "[TELEPORTER] Destination Node");
 
 	/* Built-in Netgame Objectives */
 	add_catalog_entry('flag', _forge_cat_objectives, 0, "objective\\ctf_flag_red", "[CTF] Red Flag Base");
 	add_catalog_entry('flag', _forge_cat_objectives, 0, "objective\\ctf_flag_blue", "[CTF] Blue Flag Base");
-	add_catalog_entry('flag', _forge_cat_objectives, 0, "objective\\oddball_spawn", "[ODDBALL] Ball Spawn");
+	add_catalog_entry('flag', _forge_cat_objectives, 0, "objective\\oddball_spawn", "[ODDBALL] Ball Spawn Marker");
 	add_catalog_entry('flag', _forge_cat_objectives, 0, "objective\\koth_hill", "[KOTH] Hill Marker");
-	add_catalog_entry('flag', _forge_cat_objectives, 0, "objective\\race_track", "[RACE] Checkpoint");
+	add_catalog_entry('flag', _forge_cat_objectives, 0, "objective\\race_track", "[RACE] Race Marker / Checkpoint");
 
 	/* 1. Scan Cached Tag Folder System manifest first (OpenCE Forge/cached_tags/catalog.txt) */
 	scan_cached_tags_manifest("OpenCE Forge/cached_tags/catalog.txt");
@@ -1947,10 +1949,16 @@ static void resolve_current_base_map_path(char *out_path, size_t out_sz)
 	char const *map_leaf;
 	FILE *f;
 
-	if (ce_loaded && ce_loaded[0] && is_ce_v609_map_file(ce_loaded))
+	if (ce_loaded && ce_loaded[0])
 	{
-		snprintf(out_path, out_sz, "%s", ce_loaded);
-		return;
+		char const *rel_ce = ce_loaded;
+		if ((rel_ce[0] == 'd' || rel_ce[0] == 'D') && rel_ce[1] == ':' && (rel_ce[2] == '\\' || rel_ce[2] == '/'))
+			rel_ce += 3;
+		if (is_ce_v609_map_file(rel_ce))
+		{
+			snprintf(out_path, out_sz, "%s", rel_ce);
+			return;
+		}
 	}
 
 	map_leaf = main_get_map_name();
@@ -2047,6 +2055,8 @@ int forge_ui_save_copy_as(char const *new_map_name)
 
 	if (ok)
 	{
+		extern void custom_edition_maps_look_again(void);
+		custom_edition_maps_look_again();
 		snprintf(g_forge.save_map_name, sizeof(g_forge.save_map_name), "%s", clean_name);
 		g_forge.save_map_name_len = (int)strlen(g_forge.save_map_name);
 		g_forge.has_saved_map_once = 1;
@@ -2918,6 +2928,411 @@ static void draw_custom_hw_parts(
 	rasterizer_model_end();
 }
 
+enum forge_marker_color_preset
+{
+	_marker_color_ffa_yellow = 0,
+	_marker_color_red_team,
+	_marker_color_blue_team,
+	_marker_color_tele_green,
+	_marker_color_race_orange,
+	_marker_color_oddball_purple,
+	_marker_color_koth_gold,
+	NUMBER_OF_MARKER_COLOR_PRESETS
+};
+
+enum forge_marker_mesh_kind
+{
+	_marker_mesh_player_spawn = 0,
+	_marker_mesh_tele_origin,
+	_marker_mesh_tele_dest,
+	_marker_mesh_race,
+	_marker_mesh_oddball,
+	_marker_mesh_ctf_flag,
+	NUMBER_OF_MARKER_MESH_KINDS
+};
+
+static struct
+{
+	int loaded;
+	struct
+	{
+		int valid;
+		int part_count;
+		float radius;
+		struct forge_hw_part parts[FORGE_MAX_HW_PARTS];
+	} meshes[NUMBER_OF_MARKER_MESH_KINDS];
+} s_marker_meshes = { 0 };
+
+static long get_or_create_translucent_marker_shader(int color_preset, int is_highlighted, int is_z_prime)
+{
+	static uint32_t const s_preset_rgb[NUMBER_OF_MARKER_COLOR_PRESETS] = {
+		0x00FFE618u, /* FFA Player Spawn     - Translucent Yellow */
+		0x00FF2424u, /* Red Team Spawn/Flag  - Translucent Red    */
+		0x002488FFu, /* Blue Team Spawn/Flag - Translucent Blue   */
+		0x0024FF54u, /* Teleporter In/Out    - Translucent Green  */
+		0x00FF8C14u, /* Race Marker          - Translucent Orange */
+		0x00BC38FFu, /* Oddball Marker       - Translucent Purple */
+		0x00FFC824u  /* KOTH Hill Marker     - Translucent Gold   */
+	};
+	char shdr_name[96];
+	char bitm_name[96];
+	long shdr_idx, tmpl_soso_idx, bitm_idx;
+	struct tag_iterator iter;
+	void *tmpl_ptr;
+	struct bitmap_data *bmp;
+	struct bitmap_group *bgrp;
+	uint8_t *soso_def;
+	uint32_t rgb, alpha_byte, argb;
+	uint32_t *pix;
+	float r_f, g_f, b_f;
+	int i;
+
+	if (color_preset < 0 || color_preset >= NUMBER_OF_MARKER_COLOR_PRESETS)
+		color_preset = _marker_color_ffa_yellow;
+
+	snprintf(shdr_name, sizeof(shdr_name), "forge\\markers\\shdr_%d_%d_%d",
+		color_preset, is_highlighted ? 1 : 0, is_z_prime ? 1 : 0);
+	shdr_idx = tag_loaded('soso', shdr_name);
+	if (shdr_idx != NONE)
+		return shdr_idx;
+
+	rgb = s_preset_rgb[color_preset];
+	alpha_byte = is_z_prime ? 0xFFu : (is_highlighted ? 0xB8u : 0x8Cu);
+	argb = (alpha_byte << 24) | rgb;
+	r_f = (float)((rgb >> 16) & 0xFFu) / 255.0f;
+	g_f = (float)((rgb >> 8) & 0xFFu) / 255.0f;
+	b_f = (float)(rgb & 0xFFu) / 255.0f;
+
+	snprintf(bitm_name, sizeof(bitm_name), "forge\\markers\\bitm_%d_%d_%d",
+		color_preset, is_highlighted ? 1 : 0, is_z_prime ? 1 : 0);
+	bitm_idx = tag_loaded('bitm', bitm_name);
+	if (bitm_idx == NONE)
+	{
+		/* Format 11 = _bitmap_format_a8r8g8b8 (32-bit ARGB) */
+		bmp = bitmap_2d_new(16, 16, 0, 11);
+		if (!bmp || !bmp->base_address)
+			return NONE;
+		pix = (uint32_t *)bmp->base_address;
+		for (i = 0; i < 16 * 16; i++)
+			pix[i] = argb;
+		bmp->flags &= (uint16_t)~1u;
+		bitmap_rebuild(bmp);
+
+		bgrp = (struct bitmap_group *)calloc(1, sizeof(struct bitmap_group));
+		if (!bgrp)
+			return NONE;
+		bgrp->bitmaps.count = 1;
+		bgrp->bitmaps.address = bmp;
+		bitm_idx = append_runtime_tag_instance('bitm', NONE, NONE, bitm_name, bgrp);
+		if (bitm_idx == NONE)
+			return NONE;
+	}
+
+	tag_iterator_new(&iter, 'soso');
+	tmpl_soso_idx = tag_iterator_next(&iter);
+	if (tmpl_soso_idx == NONE)
+		return NONE;
+	tmpl_ptr = shader_definition_get(tmpl_soso_idx);
+	if (!tmpl_ptr)
+		return NONE;
+
+	soso_def = (uint8_t *)calloc(1, 512);
+	if (!soso_def)
+		return NONE;
+	memcpy(soso_def, tmpl_ptr, 440);
+
+	*(int16_t *)(soso_def + 0x24) = 4; /* _shader_type_model */
+	/* Bit 1 = _shader_model_two_sided_bit, Bit 2 = _shader_model_not_alpha_tested_bit, Bit 3 = _shader_model_alpha_blended_decal_bit */
+	*(uint16_t *)(soso_def + 0x28) = is_z_prime ? ((1u << 1) | (1u << 2)) : ((1u << 1) | (1u << 2) | (1u << 3));
+	*(float *)(soso_def + 0x38) = is_highlighted ? 0.72f : 0.55f;
+	*(int16_t *)(soso_def + 0x4C) = 0;
+	*(uint16_t *)(soso_def + 0x6C) = 1u; /* _shader_model_self_illumination_no_random_phase_bit */
+	*(int16_t *)(soso_def + 0x70) = 0;
+	*(int16_t *)(soso_def + 0x72) = 0;
+	*(float *)(soso_def + 0x74) = 1.0f;
+	*(float *)(soso_def + 0x78) = r_f * 0.34f;
+	*(float *)(soso_def + 0x7C) = g_f * 0.34f;
+	*(float *)(soso_def + 0x80) = b_f * 0.34f;
+	*(float *)(soso_def + 0x84) = r_f * 0.34f;
+	*(float *)(soso_def + 0x88) = g_f * 0.34f;
+	*(float *)(soso_def + 0x8C) = b_f * 0.34f;
+	*(float *)(soso_def + 0x9C) = 1.0f;
+	*(float *)(soso_def + 0xA0) = 1.0f;
+	*(int32_t *)(soso_def + 0xA4) = 'bitm';
+	*(int32_t *)(soso_def + 0xA8) = 0;
+	*(int32_t *)(soso_def + 0xAC) = 0;
+	*(int32_t *)(soso_def + 0xB0) = bitm_idx;
+	*(int32_t *)(soso_def + 0xC8) = NONE;
+	*(int16_t *)(soso_def + 0xD4) = 0;
+	*(int16_t *)(soso_def + 0xD6) = 0;
+	*(float *)(soso_def + 0xD8) = 1.0f;
+	*(int32_t *)(soso_def + 0xE8) = NONE;
+	*(float *)(soso_def + 0xEC) = 1.0f;
+	*(float *)(soso_def + 0x144) = 0.0f;
+	*(float *)(soso_def + 0x154) = 0.0f;
+	*(int32_t *)(soso_def + 0x170) = NONE;
+
+	return append_runtime_tag_instance('soso', 'shdr', NONE, shdr_name, soso_def);
+}
+
+static void ensure_objective_marker_meshes_loaded(void)
+{
+	static char const *const s_files[NUMBER_OF_MARKER_MESH_KINDS] = {
+		"OpenCE Forge/cached_tags/markers/player_spawn.ftag",
+		"OpenCE Forge/cached_tags/markers/teleporter_origin.ftag",
+		"OpenCE Forge/cached_tags/markers/teleporter_destination.ftag",
+		"OpenCE Forge/cached_tags/markers/race_marker.ftag",
+		"OpenCE Forge/cached_tags/markers/oddball_marker.ftag",
+		"OpenCE Forge/cached_tags/markers/ctf_flag_marker.ftag"
+	};
+	int k;
+
+	if (s_marker_meshes.loaded)
+		return;
+	s_marker_meshes.loaded = 1;
+
+	for (k = 0; k < NUMBER_OF_MARKER_MESH_KINDS; k++)
+	{
+		s_marker_meshes.meshes[k].valid = 0;
+		s_marker_meshes.meshes[k].part_count = 0;
+		s_marker_meshes.meshes[k].radius = 0.45f;
+		if (load_hw_parts_from_ftag_file(
+				s_files[k],
+				s_marker_meshes.meshes[k].parts,
+				FORGE_MAX_HW_PARTS,
+				&s_marker_meshes.meshes[k].part_count,
+				&s_marker_meshes.meshes[k].radius,
+				1.0f,
+				0.0f))
+		{
+			s_marker_meshes.meshes[k].valid = (s_marker_meshes.meshes[k].part_count > 0) ? 1 : 0;
+		}
+	}
+}
+
+static void draw_translucent_marker_hw_parts(
+	union real_point3d const *pos,
+	union real_vector3d const *forward,
+	union real_vector3d const *up,
+	float radius,
+	float scale,
+	struct forge_hw_part *parts,
+	int part_count,
+	int color_preset,
+	int is_highlighted,
+	int is_preview)
+{
+	struct rasterizer_model_begin_parameters model_parameters;
+	union real_rgb_color change_colors[4];
+	real function_values[4];
+	struct real_matrix4x3 node_matrix;
+	long z_shdr_idx, col_shdr_idx;
+	struct shader *z_shdr_def;
+	struct shader *col_shdr_def;
+	int p;
+
+	if (!parts || part_count <= 0)
+		return;
+
+	z_shdr_idx = get_or_create_translucent_marker_shader(color_preset, is_highlighted, 1);
+	col_shdr_idx = get_or_create_translucent_marker_shader(color_preset, is_highlighted, 0);
+	if (col_shdr_idx == NONE)
+		return;
+	z_shdr_def = (z_shdr_idx != NONE) ? shader_definition_get(z_shdr_idx) : NULL;
+	col_shdr_def = shader_definition_get(col_shdr_idx);
+	if (!col_shdr_def)
+		return;
+
+	matrix4x3_from_point_and_vectors(&node_matrix, pos, forward, up);
+	if (scale > 0.001f && scale != 1.0f)
+		node_matrix.scale = scale;
+
+	change_colors[0].red = 1.0f;
+	change_colors[0].green = 1.0f;
+	change_colors[0].blue = 1.0f;
+	change_colors[1] = change_colors[0];
+	change_colors[2] = change_colors[0];
+	change_colors[3] = change_colors[0];
+
+	function_values[0] = 1.0f;
+	function_values[1] = 1.0f;
+	function_values[2] = 1.0f;
+	function_values[3] = 1.0f;
+
+	memset(&model_parameters, 0, sizeof(model_parameters));
+	model_parameters.unique_identifier = NONE;
+	model_parameters.lighting.ambient_color.red = is_highlighted ? 0.88f : 0.72f;
+	model_parameters.lighting.ambient_color.green = is_highlighted ? 0.88f : 0.72f;
+	model_parameters.lighting.ambient_color.blue = is_highlighted ? 0.88f : 0.72f;
+	model_parameters.lighting.distant_light_count = 1;
+	model_parameters.lighting.distant_lights[0].color.red = 0.95f;
+	model_parameters.lighting.distant_lights[0].color.green = 0.95f;
+	model_parameters.lighting.distant_lights[0].color.blue = 0.95f;
+	model_parameters.lighting.distant_lights[0].direction.i = -0.45f;
+	model_parameters.lighting.distant_lights[0].direction.j = -0.45f;
+	model_parameters.lighting.distant_lights[0].direction.k = -0.77f;
+	model_parameters.centroid = *pos;
+	model_parameters.radius = (radius > 0.1f) ? (radius * ((scale > 0.001f) ? scale : 1.0f)) : 0.6f;
+	model_parameters.animation.colors = change_colors;
+	model_parameters.animation.values = function_values;
+	model_parameters.skinning.node_matrices = &node_matrix;
+	model_parameters.skinning.node_matrix_count = 1;
+	model_parameters.geometry_flags = (1u << 2) | (is_preview ? (1u << 4) : 0u); /* _rasterizer_geometry_no_fog_bit */
+	model_parameters.base_map_scale.i = 1.0f;
+	model_parameters.base_map_scale.j = 1.0f;
+
+	rasterizer_model_begin(&model_parameters, FALSE);
+
+	for (p = 0; p < part_count; p++)
+	{
+		rasterizer_model_draw(
+			col_shdr_def,
+			0,
+			&parts[p].triangle_buffer,
+			NONE,
+			parts[p].triangle_buffer.count,
+			&parts[p].vertex_buffer,
+			NONE);
+	}
+	rasterizer_model_end();
+	if (is_preview)
+	{
+		rasterizer_set_stencil_mode(0);
+		rasterizer_set_frustum_z(0.0f, 0.0f);
+	}
+}
+
+static int resolve_marker_kind_and_color(
+	uint32_t group_tag,
+	char const *tag_path,
+	int16_t netgame_flag_type,
+	int16_t team_designator,
+	int *out_mesh_kind,
+	int *out_color_preset)
+{
+	if (group_tag == 'spwn' || (tag_path && strncmp(tag_path, "spawn\\", 6) == 0))
+	{
+		*out_mesh_kind = _marker_mesh_player_spawn;
+		if (team_designator == 1 || (tag_path && strstr(tag_path, "blue")))
+			*out_color_preset = _marker_color_blue_team;
+		else if (team_designator == 2 || (tag_path && strstr(tag_path, "ffa")))
+			*out_color_preset = _marker_color_ffa_yellow;
+		else
+			*out_color_preset = _marker_color_red_team;
+		return 1;
+	}
+	if (group_tag == 'tele' || (tag_path && strncmp(tag_path, "teleporter\\", 11) == 0))
+	{
+		int is_sender = (netgame_flag_type == 6 /* _netgame_flag_teleporter_source */ ||
+			(tag_path && (strstr(tag_path, "origin") || strstr(tag_path, "sender"))));
+		*out_mesh_kind = is_sender ? _marker_mesh_tele_origin : _marker_mesh_tele_dest;
+		*out_color_preset = _marker_color_tele_green;
+		return 1;
+	}
+	if (group_tag == 'flag' || (tag_path && strncmp(tag_path, "objective\\", 10) == 0))
+	{
+		if (netgame_flag_type == 2 /* _netgame_flag_oddball_ball_spawn */ ||
+			(tag_path && strstr(tag_path, "oddball")))
+		{
+			*out_mesh_kind = _marker_mesh_oddball;
+			*out_color_preset = _marker_color_oddball_purple;
+			return 1;
+		}
+		if (netgame_flag_type == 3 /* _netgame_flag_race_track */ ||
+			netgame_flag_type == 4 /* _netgame_flag_race_vehicle */ ||
+			(tag_path && strstr(tag_path, "race")))
+		{
+			*out_mesh_kind = _marker_mesh_race;
+			*out_color_preset = _marker_color_race_orange;
+			return 1;
+		}
+		if (netgame_flag_type == 0 /* _netgame_flag_ctf_flag */ ||
+			netgame_flag_type == 1 /* _netgame_flag_ctf_vehicle */ ||
+			(tag_path && strstr(tag_path, "ctf")))
+		{
+			*out_mesh_kind = _marker_mesh_ctf_flag;
+			*out_color_preset = (team_designator == 1 || (tag_path && strstr(tag_path, "blue")))
+				? _marker_color_blue_team
+				: _marker_color_red_team;
+			return 1;
+		}
+		*out_mesh_kind = _marker_mesh_player_spawn;
+		*out_color_preset = _marker_color_koth_gold;
+		return 1;
+	}
+	return 0;
+}
+
+static void render_world_objective_and_spawn_markers(void)
+{
+	int i;
+
+	ensure_objective_marker_meshes_loaded();
+
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *inst = &g_forge.live_instances[i];
+		int mesh_kind = 0, color_preset = 0;
+		int is_hi;
+		float dx, dy, dz, d2;
+		union real_point3d pos;
+		union real_vector3d fwd, up;
+
+		if (!inst->active)
+			continue;
+		if (inst->group_tag != 'spwn' && inst->group_tag != 'tele' && inst->group_tag != 'flag')
+			continue;
+		if (!resolve_marker_kind_and_color(
+				inst->group_tag,
+				inst->tag_path,
+				inst->netgame_flag_type,
+				inst->team_designator,
+				&mesh_kind,
+				&color_preset))
+			continue;
+		if (mesh_kind < 0 || mesh_kind >= NUMBER_OF_MARKER_MESH_KINDS ||
+			!s_marker_meshes.meshes[mesh_kind].valid)
+			continue;
+
+		is_hi = (i == g_forge.grabbed_live_index || i == g_forge.hovered_live_index);
+		if (!is_hi && g_forge.koth_group_placing &&
+			inst->group_tag == 'flag' &&
+			(inst->netgame_flag_type == 8 || strstr(inst->tag_path, "koth")) &&
+			inst->team_designator == g_forge.koth_group_hill_id)
+		{
+			is_hi = 1;
+		}
+		dx = inst->x - render.camera.position.x;
+		dy = inst->y - render.camera.position.y;
+		dz = inst->z - render.camera.position.z;
+		d2 = dx * dx + dy * dy + dz * dz;
+		if (d2 > 300.0f * 300.0f && !is_hi)
+			continue;
+
+		pos.x = inst->x;
+		pos.y = inst->y;
+		pos.z = inst->z;
+		fwd.i = (float)cosine(inst->yaw);
+		fwd.j = (float)sine(inst->yaw);
+		fwd.k = 0.0f;
+		up.i = 0.0f;
+		up.j = 0.0f;
+		up.k = 1.0f;
+
+		draw_translucent_marker_hw_parts(
+			&pos,
+			&fwd,
+			&up,
+			s_marker_meshes.meshes[mesh_kind].radius,
+			(inst->group_tag == 'flag' && (inst->netgame_flag_type == 8 || strstr(inst->tag_path, "koth"))) ? 0.38f : 1.0f,
+			s_marker_meshes.meshes[mesh_kind].parts,
+			s_marker_meshes.meshes[mesh_kind].part_count,
+			color_preset,
+			is_hi,
+			0);
+	}
+}
+
 static struct
 {
 	int loaded_catalog_idx;
@@ -2934,6 +3349,7 @@ static void render_spawn_palette_3d_preview(long object_index, void const *light
 	union real_point3d preview_pos;
 	union real_vector3d preview_fwd, preview_up, cam_right;
 	float dist, angle, preview_scale;
+	int marker_kind = -1, marker_color = 0;
 
 	if (g_forge.active_modal != _forge_modal_spawn_palette || g_forge.h3_menu_stage != 1)
 		return;
@@ -2955,6 +3371,43 @@ static void render_spawn_palette_3d_preview(long object_index, void const *light
 		return;
 
 	entry = &g_forge.catalog[chosen_idx];
+
+	/* Check if this catalog entry is one of our 3D Translucent Spawn/Teleporter/Objective Markers! */
+	if (resolve_marker_kind_and_color(entry->group_tag, entry->tag_path, -1, -1, &marker_kind, &marker_color))
+	{
+		ensure_objective_marker_meshes_loaded();
+		if (marker_kind >= 0 && marker_kind < NUMBER_OF_MARKER_MESH_KINDS &&
+			s_marker_meshes.meshes[marker_kind].valid)
+		{
+			dist = 1.45f;
+			cross_product3d(&render.camera.forward, &render.camera.up, &cam_right);
+			preview_pos.x = render.camera.position.x + render.camera.forward.i * dist + cam_right.i * 0.42f - render.camera.up.i * 0.18f;
+			preview_pos.y = render.camera.position.y + render.camera.forward.j * dist + cam_right.j * 0.42f - render.camera.up.j * 0.18f;
+			preview_pos.z = render.camera.position.z + render.camera.forward.k * dist + cam_right.k * 0.42f - render.camera.up.k * 0.18f;
+
+			angle = (float)(system_milliseconds() % 6000u) * (6.2831853f / 6000.0f);
+			preview_fwd.i = (float)cosine(angle);
+			preview_fwd.j = (float)sine(angle);
+			preview_fwd.k = 0.0f;
+			preview_up.i = 0.0f;
+			preview_up.j = 0.0f;
+			preview_up.k = 1.0f;
+
+			draw_translucent_marker_hw_parts(
+				&preview_pos,
+				&preview_fwd,
+				&preview_up,
+				s_marker_meshes.meshes[marker_kind].radius,
+				1.15f,
+				s_marker_meshes.meshes[marker_kind].parts,
+				s_marker_meshes.meshes[marker_kind].part_count,
+				marker_color,
+				1,
+				1);
+			return;
+		}
+	}
+
 	if (s_preview_hw.loaded_catalog_idx != chosen_idx)
 	{
 		char ftag_path[512];
@@ -3040,6 +3493,7 @@ void forge_render_world_3d_overlays(void const *lighting_ptr)
 {
 	if (!g_forge_session_enabled || !g_forge.initialized)
 		return;
+	render_world_objective_and_spawn_markers();
 	render_spawn_palette_3d_preview(NONE, lighting_ptr);
 }
 

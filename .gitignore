@@ -6,8 +6,11 @@ forge_maps/*
 OpenCE Forge/forge_maps/*.map
 OpenCE Forge/cached_tags/*
 !OpenCE Forge/cached_tags/.gitkeep
+!OpenCE Forge/cached_tags/markers/
+!OpenCE Forge/cached_tags/markers/*.ftag
 FORGE CODE/GAME MAPS/
 FORGE CODE/build/
 *.o
 *.obj
+!Forge Objective Markers/*.obj
 *.pdb
