@@ -27,6 +27,7 @@
 #include "interface/ui_widget.h"
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
+#include "structures/structure_bsp_definitions.h"
 #include "bitmaps/bitmap_group.h"
 #include "bitmaps/bitmaps.h"
 #include "rasterizer/rasterizer.h"
@@ -36,6 +37,8 @@
 
 #include "objects/object_lights.h"
 #include "objects/widgets/widgets.h"
+#include "devices/devices.h"
+#include "devices/device_light_fixtures.h"
 #include "forge_engine.h"
 
 extern unsigned long system_milliseconds(void);
@@ -97,11 +100,42 @@ static void forge_hide_spartan_linked_attachments_and_children(long unit_idx, in
 	}
 }
 
+#define FORGE_IN_MATCH_HUD_SCALE 0.75f
+#define FORGE_COUNTER_HUD_SCALE (FORGE_IN_MATCH_HUD_SCALE * 0.5f)
+
+static float s_hud_ui_scale = 1.0f;
+static float s_hud_ui_origin_x = 0.0f;
+static float s_hud_ui_origin_y = 0.0f;
+
+static void set_forge_hud_ui_scale(float scale, float origin_x, float origin_y)
+{
+	s_hud_ui_scale = (scale > 0.05f) ? scale : 1.0f;
+	s_hud_ui_origin_x = origin_x;
+	s_hud_ui_origin_y = origin_y;
+}
+
 static void draw_quad(rectangle2d const *r, uint32_t argb)
 {
+	short x0, y0, x1, y1;
 	if (!r || r->x1 <= r->x0 || r->y1 <= r->y0 || ((argb >> 24) & 0xFFu) == 0)
 		return;
-	forge_draw_screen_rect(r->x0, r->y0, r->x1, r->y1, argb);
+	if (s_hud_ui_scale != 1.0f)
+	{
+		x0 = (short)(s_hud_ui_origin_x + ((float)r->x0 - s_hud_ui_origin_x) * s_hud_ui_scale + 0.5f);
+		y0 = (short)(s_hud_ui_origin_y + ((float)r->y0 - s_hud_ui_origin_y) * s_hud_ui_scale + 0.5f);
+		x1 = (short)(s_hud_ui_origin_x + ((float)r->x1 - s_hud_ui_origin_x) * s_hud_ui_scale + 0.5f);
+		y1 = (short)(s_hud_ui_origin_y + ((float)r->y1 - s_hud_ui_origin_y) * s_hud_ui_scale + 0.5f);
+		if (x1 <= x0) x1 = (short)(x0 + 1);
+		if (y1 <= y0) y1 = (short)(y0 + 1);
+	}
+	else
+	{
+		x0 = r->x0;
+		y0 = r->y0;
+		x1 = r->x1;
+		y1 = r->y1;
+	}
+	forge_draw_screen_rect(x0, y0, x1, y1, argb);
 }
 
 static void draw_box_border(short x0, short y0, short x1, short y1, short thick, uint32_t argb)
@@ -117,7 +151,21 @@ static void draw_box_border(short x0, short y0, short x1, short y1, short thick,
 
 static long get_small_forge_font(long fallback_font)
 {
-	long f = interface_get_tag_index(_interface_font_terminal);
+	long f = tag_loaded('font', "ui\\small_ui");
+	if (f == NONE)
+		f = tag_loaded('font', "ui\\large_ui");
+	if (f == NONE)
+		f = interface_get_tag_index(_interface_font_system);
+	if (f == NONE)
+		f = fallback_font;
+	return f;
+}
+
+static long get_large_forge_font(long fallback_font)
+{
+	long f = tag_loaded('font', "ui\\large_ui");
+	if (f == NONE)
+		f = tag_loaded('font', "ui\\small_ui");
 	if (f == NONE)
 		f = interface_get_tag_index(_interface_font_system);
 	if (f == NONE)
@@ -254,16 +302,16 @@ static int extract_xml_attr(char const *tag_start, char const *tag_end, char con
 
 static void init_default_area_style(struct forge_ui_area_style *st, char const *default_png)
 {
-	snprintf(st->font_name, sizeof(st->font_name), "terminal");
+	snprintf(st->font_name, sizeof(st->font_name), "large");
 	st->font_style = NONE;
 	st->font_scale = 1.0f;
-	st->title_color = 0xFFA6EBFFu;
-	st->text_color = 0xFFC7DBFFu;
-	st->selected_color = 0xFFFFF5A6u;
-	st->bg_color = 0xE00A1526u;
-	st->header_color = 0xB014325Au;
+	st->title_color = 0xFFFFFFFFu;
+	st->text_color = 0xFF2896FFu;
+	st->selected_color = 0xFFFFFFFFu;
+	st->bg_color = 0xC00A2649u;
+	st->header_color = 0x00000000u;
 	st->highlight_color = 0xD8225C9Cu;
-	st->border_color = 0xE84498F2u;
+	st->border_color = 0xFF2896FFu;
 	st->image_tint = 0xFFFFFFFFu;
 	snprintf(st->bg_image, sizeof(st->bg_image), "%s", default_png ? default_png : "none");
 	st->use_image = (default_png && default_png[0] && _stricmp(default_png, "none") != 0) ? 1 : 0;
@@ -328,7 +376,7 @@ static void sync_and_register_area_png(struct forge_ui_area_style *st, int area_
 		st->bitmap.depth = 1;
 		st->bitmap.type = 0;   /* _bitmap_type_2d_texture */
 		st->bitmap.format = 11; /* _bitmap_format_a8r8g8b8 */
-		st->bitmap.flags = 0;
+		st->bitmap.flags = 1;  /* _bitmap_has_power_of_two_dimensions_bit */
 		st->bitmap.base_address = st->dummy_pixels;
 		if (rasterizer_bitmap_new(&st->bitmap) && st->bitmap.hardware_format)
 			st->bitmap_initialized = 1;
@@ -407,7 +455,7 @@ static void forge_ui_theme_load(int is_hot_reload)
 		"panel_modal.png",
 		"panel_top_bar.png",
 		"panel_bottom_bar.png",
-		"panel_modal.png",
+		"escape_menu_background.png",
 		"panel_modal.png",
 		"panel_bottom_bar.png",
 		"none"
@@ -421,18 +469,15 @@ static void forge_ui_theme_load(int is_hot_reload)
 	for (i = 0; i < NUMBER_OF_FORGE_UI_AREAS; i++)
 		init_default_area_style(&s_ui_theme.areas[i], area_default_pngs[i]);
 
-	/* Specific default color tuning per area */
-	s_ui_theme.areas[_forge_ui_area_preview_panel].title_color = 0xFF80FFB8u;
-	s_ui_theme.areas[_forge_ui_area_preview_panel].border_color = 0xC044FF98u;
-	s_ui_theme.areas[_forge_ui_area_top_bar].bg_color = 0xCC0A1426u;
-	s_ui_theme.areas[_forge_ui_area_top_bar].border_color = 0xD03C8CE6u;
-	s_ui_theme.areas[_forge_ui_area_bottom_bar].bg_color = 0xB8081222u;
-	s_ui_theme.areas[_forge_ui_area_bottom_bar].border_color = 0x903578C4u;
-	s_ui_theme.areas[_forge_ui_area_toast_bar].bg_color = 0xD80A182Cu;
-	s_ui_theme.areas[_forge_ui_area_toast_bar].text_color = 0xFFA6F2FFu;
-	s_ui_theme.areas[_forge_ui_area_markers].title_color = 0xF259FF8Cu;
-	s_ui_theme.areas[_forge_ui_area_markers].text_color = 0xF2FFE673u;
-	s_ui_theme.areas[_forge_ui_area_markers].selected_color = 0xF273FFA6u;
+	/* Specific default font/color tuning per area matching base game menu UI styling */
+	snprintf(s_ui_theme.areas[_forge_ui_area_top_bar].font_name, sizeof(s_ui_theme.areas[_forge_ui_area_top_bar].font_name), "small");
+	snprintf(s_ui_theme.areas[_forge_ui_area_bottom_bar].font_name, sizeof(s_ui_theme.areas[_forge_ui_area_bottom_bar].font_name), "small");
+	snprintf(s_ui_theme.areas[_forge_ui_area_toast_bar].font_name, sizeof(s_ui_theme.areas[_forge_ui_area_toast_bar].font_name), "small");
+	snprintf(s_ui_theme.areas[_forge_ui_area_markers].font_name, sizeof(s_ui_theme.areas[_forge_ui_area_markers].font_name), "small");
+	s_ui_theme.areas[_forge_ui_area_toast_bar].text_color = 0xFFFFFFFFu;
+	s_ui_theme.areas[_forge_ui_area_markers].title_color = 0xFFFFFFFFu;
+	s_ui_theme.areas[_forge_ui_area_markers].text_color = 0xFF2896FFu;
+	s_ui_theme.areas[_forge_ui_area_markers].selected_color = 0xFFFFFFFFu;
 
 	f = fopen("OpenCE Forge/ui/forge_ui.xml", "rb");
 	if (f)
@@ -478,7 +523,13 @@ static void forge_ui_theme_ensure_loaded(void)
 	}
 }
 
-static void draw_ui_png_quad(struct bitmap_data *bitmap, short x0, short y0, short x1, short y1, uint32_t tint_argb)
+static void draw_ui_png_quad_uv(
+	struct bitmap_data *bitmap,
+	short x0, short y0,
+	short x1, short y1,
+	float u0, float v0,
+	float u1, float v1,
+	uint32_t tint_argb)
 {
 	struct dynamic_screen_vertex vertices[4];
 	struct rasterizer_dynamic_screen_geometry_parameters parameters;
@@ -489,10 +540,17 @@ static void draw_ui_png_quad(struct bitmap_data *bitmap, short x0, short y0, sho
 
 	for (v = 0; v < 4; v++)
 	{
-		vertices[v].position.x = (v % 3) ? (real)x1 : (real)x0;
-		vertices[v].position.y = (v > 1) ? (real)y1 : (real)y0;
-		vertices[v].texture_coordinates.x = (v % 3) ? 1.0f : 0.0f;
-		vertices[v].texture_coordinates.y = (v > 1) ? 1.0f : 0.0f;
+		real vx = (v % 3) ? (real)x1 : (real)x0;
+		real vy = (v > 1) ? (real)y1 : (real)y0;
+		if (s_hud_ui_scale != 1.0f)
+		{
+			vx = s_hud_ui_origin_x + (vx - s_hud_ui_origin_x) * s_hud_ui_scale;
+			vy = s_hud_ui_origin_y + (vy - s_hud_ui_origin_y) * s_hud_ui_scale;
+		}
+		vertices[v].position.x = vx;
+		vertices[v].position.y = vy;
+		vertices[v].texture_coordinates.x = (v % 3) ? u1 : u0;
+		vertices[v].texture_coordinates.y = (v > 1) ? v1 : v0;
 		vertices[v].color = tint_argb;
 	}
 
@@ -513,6 +571,253 @@ static void draw_ui_png_quad(struct bitmap_data *bitmap, short x0, short y0, sho
 	parameters.map[2] = NULL;
 
 	rasterizer_psuedo_dynamic_screen_quad_draw(&parameters, vertices);
+}
+
+static void draw_ui_png_quad(struct bitmap_data *bitmap, short x0, short y0, short x1, short y1, uint32_t tint_argb)
+{
+	draw_ui_png_quad_uv(bitmap, x0, y0, x1, y1, 0.0f, 0.0f, 1.0f, 1.0f, tint_argb);
+}
+
+/* ============================================================================
+ * Base Game Menu Bitmap & Font Rendering Helpers
+ * Draws authentic Halo CE / OpenCE menu tags (pausebox, objectives, option_bkds,
+ * list_item_bkd, sel_list_item_bkd, text_button_background, arrow_sm_*, blue)
+ * and ui\large_ui / ui\small_ui fonts directly in-game.
+ * ============================================================================ */
+
+static int draw_ce_menu_bitmap_uv(
+	char const *tag_name,
+	short frame_idx,
+	short x0, short y0,
+	short x1, short y1,
+	float u0, float v0,
+	float u1, float v1,
+	uint32_t tint_argb)
+{
+	long tag_idx;
+	struct bitmap_data *bmp;
+
+	if (!tag_name || !tag_name[0] || x1 <= x0 || y1 <= y0)
+		return 0;
+
+	tag_idx = tag_loaded('bitm', tag_name);
+	if (tag_idx == NONE)
+		return 0;
+
+	bmp = bitmap_group_get_bitmap_from_sequence(tag_idx, 0, frame_idx);
+	if (!bmp && frame_idx != 0)
+		bmp = bitmap_group_get_bitmap_from_sequence(tag_idx, 0, 0);
+	if (!bmp || !bmp->hardware_format || bmp->width <= 0 || bmp->height <= 0)
+		return 0;
+
+	draw_ui_png_quad_uv(bmp, x0, y0, x1, y1, u0, v0, u1, v1, tint_argb);
+	return 1;
+}
+
+static int draw_ce_menu_bitmap_cropped(
+	char const *tag_name,
+	short frame_idx,
+	short x0, short y0,
+	short x1, short y1,
+	short crop_w, short crop_h,
+	uint32_t tint_argb)
+{
+	long tag_idx;
+	struct bitmap_data *bmp;
+	float u1 = 1.0f, v1 = 1.0f;
+
+	if (!tag_name || !tag_name[0] || x1 <= x0 || y1 <= y0)
+		return 0;
+
+	tag_idx = tag_loaded('bitm', tag_name);
+	if (tag_idx == NONE)
+		return 0;
+
+	bmp = bitmap_group_get_bitmap_from_sequence(tag_idx, 0, frame_idx);
+	if (!bmp && frame_idx != 0)
+		bmp = bitmap_group_get_bitmap_from_sequence(tag_idx, 0, 0);
+	if (!bmp || !bmp->hardware_format || bmp->width <= 0 || bmp->height <= 0)
+		return 0;
+
+	if (crop_w > 0 && crop_w < bmp->width)
+		u1 = (float)crop_w / (float)bmp->width;
+	if (crop_h > 0 && crop_h < bmp->height)
+		v1 = (float)crop_h / (float)bmp->height;
+
+	draw_ui_png_quad_uv(bmp, x0, y0, x1, y1, 0.0f, 0.0f, u1, v1, tint_argb);
+	return 1;
+}
+
+/* Draws a 3-slice horizontally rounded Halo CE option/row highlight bar
+ * using pc\bitmaps\option_bkds_sm so both left and right ends have crisp rounded caps. */
+static int draw_ce_rounded_row_bar(
+	short frame_idx,
+	short x0, short y0,
+	short x1, short y1)
+{
+	short w = (short)(x1 - x0);
+	short cap = 16;
+	float v1 = 28.0f / 32.0f;
+	float u_cap = 16.0f / 256.0f;
+
+	if (w <= 0 || y1 <= y0)
+		return 0;
+	if (w <= cap * 2)
+		return draw_ce_menu_bitmap_cropped("pc\\bitmaps\\option_bkds_sm", frame_idx, x0, y0, x1, y1, 256, 28, 0xFFFFFFFFu);
+
+	if (draw_ce_menu_bitmap_uv("pc\\bitmaps\\option_bkds_sm", frame_idx, x0, y0, (short)(x0 + cap), y1, 0.0f, 0.0f, u_cap, v1, 0xFFFFFFFFu) &&
+		draw_ce_menu_bitmap_uv("pc\\bitmaps\\option_bkds_sm", frame_idx, (short)(x0 + cap), y0, (short)(x1 - cap), y1, u_cap, 0.0f, 1.0f - u_cap, v1, 0xFFFFFFFFu) &&
+		draw_ce_menu_bitmap_uv("pc\\bitmaps\\option_bkds_sm", frame_idx, (short)(x1 - cap), y0, x1, y1, 1.0f - u_cap, 0.0f, 1.0f, v1, 0xFFFFFFFFu))
+	{
+		return 1;
+	}
+	return 0;
+}
+
+/* Draws the authentic 9-slice Halo CE pause/objectives container box with 1:1 rounded corners */
+static void draw_ce_pause_box(short x0, short y0, short width, short height, int with_header)
+{
+	short x1 = (short)(x0 + width);
+	short y1 = (short)(y0 + height);
+	char const *top_left   = with_header ? "pc\\pause\\objectives_left"   : "pc\\pause\\pausebox_left";
+	char const *top_center = with_header ? "pc\\pause\\objectives_center" : "pc\\pause\\pausebox_center";
+	char const *top_right  = with_header ? "pc\\pause\\objectives_right"  : "pc\\pause\\pausebox_right";
+	char const *obj_left   = "pc\\pause\\objectives_left";
+	char const *obj_center = "pc\\pause\\objectives_center";
+	char const *obj_right  = "pc\\pause\\objectives_right";
+	short frame_idx = 1;
+	short top_h = with_header ? 30 : 14;
+	short bot_h = 14;
+	float v_top_end = (float)top_h / 256.0f;
+	float v_body_start = 32.0f / 256.0f;
+	float v_body_end = 211.0f / 256.0f;
+	float v_bot_end = 225.0f / 256.0f;
+
+	if (width <= 32 || height <= 28)
+		return;
+
+	/* Top slice (rounded top corners; includes 29px dark header bar when with_header != 0,
+	 * or clean blue rounded top cap from pausebox when with_header == 0) */
+	if (draw_ce_menu_bitmap_uv(top_left, frame_idx, x0, y0, (short)(x0 + 16), (short)(y0 + top_h), 0.0f, 0.0f, 1.0f, v_top_end, 0xFFFFFFFFu) &&
+		draw_ce_menu_bitmap_uv(top_center, frame_idx, (short)(x0 + 16), y0, (short)(x1 - 16), (short)(y0 + top_h), 0.0f, 0.0f, 1.0f, v_top_end, 0xFFFFFFFFu) &&
+		draw_ce_menu_bitmap_uv(top_right, frame_idx, (short)(x1 - 16), y0, x1, (short)(y0 + top_h), 0.0f, 0.0f, 1.0f, v_top_end, 0xFFFFFFFFu) &&
+		/* Middle body slice (clean translucent blue gradient from objectives_left/center/right) */
+		draw_ce_menu_bitmap_uv(obj_left, frame_idx, x0, (short)(y0 + top_h), (short)(x0 + 16), (short)(y1 - bot_h), 0.0f, v_body_start, 1.0f, v_body_end, 0xFFFFFFFFu) &&
+		draw_ce_menu_bitmap_uv(obj_center, frame_idx, (short)(x0 + 16), (short)(y0 + top_h), (short)(x1 - 16), (short)(y1 - bot_h), 0.0f, v_body_start, 1.0f, v_body_end, 0xFFFFFFFFu) &&
+		draw_ce_menu_bitmap_uv(obj_right, frame_idx, (short)(x1 - 16), (short)(y0 + top_h), x1, (short)(y1 - bot_h), 0.0f, v_body_start, 1.0f, v_body_end, 0xFFFFFFFFu) &&
+		/* Bottom slice (1:1 unstretched rounded bottom corners from objectives_left/center/right, no footer line) */
+		draw_ce_menu_bitmap_uv(obj_left, frame_idx, x0, (short)(y1 - bot_h), (short)(x0 + 16), y1, 0.0f, v_body_end, 1.0f, v_bot_end, 0xFFFFFFFFu) &&
+		draw_ce_menu_bitmap_uv(obj_center, frame_idx, (short)(x0 + 16), (short)(y1 - bot_h), (short)(x1 - 16), y1, 0.0f, v_body_end, 1.0f, v_bot_end, 0xFFFFFFFFu) &&
+		draw_ce_menu_bitmap_uv(obj_right, frame_idx, (short)(x1 - 16), (short)(y1 - bot_h), x1, y1, 0.0f, v_body_end, 1.0f, v_bot_end, 0xFFFFFFFFu))
+	{
+		return;
+	}
+
+	/* Fallback if menu tags are not present */
+	{
+		rectangle2d body, hdr;
+		body.x0 = x0; body.y0 = y0; body.x1 = x1; body.y1 = y1;
+		draw_quad(&body, 0xC00A2649u);
+		if (with_header)
+		{
+			hdr.x0 = (short)(x0 + 2); hdr.y0 = (short)(y0 + 2); hdr.x1 = (short)(x1 - 2); hdr.y1 = (short)(y0 + 28);
+			draw_quad(&hdr, 0xE0000000u);
+			hdr.y0 = (short)(y0 + 28); hdr.y1 = (short)(y0 + 29);
+			draw_quad(&hdr, 0xFF2896FFu);
+		}
+		draw_box_border(x0, y0, x1, y1, 2, 0xFF2896FFu);
+	}
+}
+
+static void draw_ce_blue_line(short x0, short y0, short x1, short height)
+{
+	if (height <= 0)
+		height = 1;
+	if (!draw_ce_menu_bitmap_cropped("pc\\bitmaps\\blue", 0, x0, y0, x1, (short)(y0 + height), 4, 4, 0xFFFFFFFFu))
+	{
+		rectangle2d r;
+		r.x0 = x0; r.y0 = y0; r.x1 = x1; r.y1 = (short)(y0 + height);
+		draw_quad(&r, 0xFF2896FFu);
+	}
+}
+
+static void draw_ce_menu_str_box(
+	int use_large_font,
+	long fallback_font,
+	short x0, short y0,
+	short x1, short y1,
+	short justification,
+	char const *ascii,
+	uint32_t argb_col)
+{
+	wchar_t wbuf[256];
+	rectangle2d bounds;
+	real_argb_color col;
+	long font_idx;
+	int i;
+
+	if (!ascii || !ascii[0] || x1 <= x0 || y1 <= y0)
+		return;
+	for (i = 0; ascii[i] && i < 254; i++)
+	{
+		unsigned char ch = (unsigned char)ascii[i];
+		if (ch == '|')
+			ch = '/';
+		wbuf[i] = (wchar_t)ch;
+	}
+	wbuf[i] = 0;
+
+	col.alpha = (real)((argb_col >> 24) & 0xFFu) / 255.0f;
+	col.red   = (real)((argb_col >> 16) & 0xFFu) / 255.0f;
+	col.green = (real)((argb_col >> 8)  & 0xFFu) / 255.0f;
+	col.blue  = (real)(argb_col         & 0xFFu) / 255.0f;
+
+	font_idx = use_large_font ? get_large_forge_font(fallback_font) : get_small_forge_font(fallback_font);
+
+	bounds.x0 = x0;
+	bounds.y0 = y0;
+	bounds.x1 = x1;
+	bounds.y1 = y1;
+
+	if (s_hud_ui_scale != 1.0f)
+		rasterizer_text_set_scale(s_hud_ui_scale, s_hud_ui_origin_x, s_hud_ui_origin_y);
+	draw_string_set_draw_mode(font_idx, NONE, justification, 0, &col);
+	rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, wbuf);
+	if (s_hud_ui_scale != 1.0f)
+		rasterizer_text_set_scale(1.0f, 0.0f, 0.0f);
+}
+
+static void draw_ce_menu_str(
+	int use_large_font,
+	long fallback_font,
+	short x,
+	short y,
+	char const *ascii,
+	uint32_t argb_col)
+{
+	draw_ce_menu_str_box(use_large_font, fallback_font, x, y, (short)(x + 2048), (short)(y + 128), 0, ascii, argb_col);
+}
+
+static void draw_ce_text_button(
+	long fallback_font,
+	short x0, short y0,
+	short width, short height,
+	int focused,
+	char const *label)
+{
+	short x1 = (short)(x0 + width);
+	short y1 = (short)(y0 + height);
+	short text_y = (short)(y0 + (height - 20) / 2);
+	uint32_t text_col = focused ? 0xFFFFFFFFu : 0xFF2896FFu;
+
+	if (!draw_ce_menu_bitmap_cropped("pc\\bitmaps\\text_button_background", (short)(focused ? 1 : 0), x0, y0, x1, y1, 128, 21, 0xFFFFFFFFu))
+	{
+		rectangle2d r;
+		r.x0 = x0; r.y0 = y0; r.x1 = x1; r.y1 = y1;
+		draw_quad(&r, focused ? 0xD8143C70u : 0xB007162Cu);
+		draw_box_border(x0, y0, x1, y1, 1, 0xFF2896FFu);
+	}
+	draw_ce_menu_str_box(0, fallback_font, (short)(x0 + 4), text_y, (short)(x1 - 4), (short)(y1 + 4), 2 /* center */, label, text_col);
 }
 
 static void draw_themed_panel(enum forge_ui_area_id area_id, rectangle2d const *r, short header_height)
@@ -565,7 +870,7 @@ static long resolve_theme_font(char const *font_name, long fallback_font)
 			f = tag_loaded('font', font_name);
 	}
 	if (f == NONE)
-		f = get_small_forge_font(fallback_font);
+		f = get_large_forge_font(fallback_font);
 	return f;
 }
 
@@ -748,6 +1053,27 @@ static int32_t adopt_default_scenario_object(long object_index)
 	inst->z = obj->object.position.z;
 	forward_up_to_euler(&obj->object.forward, &obj->object.up, &inst->yaw, &inst->pitch, &inst->roll);
 	snprintf(inst->tag_path, sizeof(inst->tag_path), "%s", tname);
+
+	/* Check if an existing default_edit already tracks this default scenario object (e.g. from a loaded saved map) */
+	for (i = 0; i < (int32_t)g_forge.edit_state.default_edit_count; i++)
+	{
+		struct forge_default_object_edit *de = &g_forge.edit_state.default_edits[i];
+		float dx, dy, dz;
+		if (!de->active || de->deleted || de->group_tag != grp)
+			continue;
+		dx = de->new_x - inst->x;
+		dy = de->new_y - inst->y;
+		dz = de->new_z - inst->z;
+		if (dx * dx + dy * dy < 9.0f && (float)fabs((double)dz) < 5.0f &&
+			_stricmp(de->tag_path, tname) == 0)
+		{
+			inst->edit_entry_index = i;
+			inst->orig_x = de->orig_x;
+			inst->orig_y = de->orig_y;
+			inst->orig_z = de->orig_z;
+			return live_idx;
+		}
+	}
 
 	if (g_forge.edit_state.default_edit_count < FORGE_MAX_DEFAULT_OBJECT_EDITS)
 	{
@@ -1035,13 +1361,6 @@ int32_t forge_3d_spawn_object_at(
 	if (!tag_path || !tag_path[0])
 		return -1;
 
-	/* Enforce Multiplayer Asset Guard */
-	if (forge_is_multiplayer_session() && source_cache_id != 0)
-	{
-		forge_set_status("Multiplayer Asset Guard: Custom tags from customforgeasset.map are disabled online!");
-		return -1;
-	}
-
 	if (g_forge.live_instance_count >= FORGE_MAX_LIVE_INSTANCES)
 	{
 		forge_set_status("Forge Object Budget Reached (%d/%d)!", g_forge.live_instance_count, FORGE_MAX_LIVE_INSTANCES);
@@ -1154,6 +1473,32 @@ int32_t forge_3d_spawn_object_at(
 					SET_FLAG(obj->object.flags, _object_cannot_be_garbage_bit, TRUE);
 					SET_FLAG(obj->object.flags, _object_deleted_when_deactivated_bit, FALSE);
 					SET_FLAG(obj->object.flags, _object_outside_of_map_bit, FALSE);
+					if (group_tag == 'vehi')
+					{
+						unit_set_enterable_by_player(inst->object_index, TRUE);
+						unit_set_controllable(inst->object_index, TRUE);
+					}
+					else if (obj->object.type == _object_type_machine ||
+							 obj->object.type == _object_type_light_fixture ||
+							 obj->object.type == _object_type_control)
+					{
+						struct scenario_device_datum scen_dev;
+						memset(&scen_dev, 0, sizeof(scen_dev));
+						scen_dev.power_group_index = NONE;
+						scen_dev.position_group_index = NONE;
+						scen_dev.flags = 0;
+						device_add_scenario_information(inst->object_index, &scen_dev);
+						if (obj->object.type == _object_type_light_fixture)
+						{
+							struct light_fixture_datum *lf = (struct light_fixture_datum *)obj;
+							lf->light_fixture.color.red = 1.0f;
+							lf->light_fixture.color.green = 1.0f;
+							lf->light_fixture.color.blue = 1.0f;
+							lf->light_fixture.intensity = 1.0f;
+							lf->light_fixture.falloff_angle = 1.0f;
+							lf->light_fixture.cutoff_angle = 1.2f;
+						}
+					}
 					object_set_automatic_deactivation(inst->object_index, FALSE);
 					object_activate(inst->object_index);
 				}
@@ -1357,10 +1702,23 @@ static int get_filtered_catalog_indices(int *out_indices, int max_out)
 	return get_filtered_catalog_indices_for_cat(g_forge.current_category, out_indices, max_out);
 }
 
+static int s_save_modal_just_opened = 0;
+
 static void update_save_modal_input(void)
 {
 	static int prev_key[256];
 	int vk;
+
+	director_inhibit_input(0);
+	director_inhibit_facing(0);
+
+	if (s_save_modal_just_opened)
+	{
+		for (vk = 0; vk < 256; vk++)
+			prev_key[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+		s_save_modal_just_opened = 0;
+		return;
+	}
 
 	for (vk = 'A'; vk <= 'Z'; vk++)
 	{
@@ -1398,6 +1756,16 @@ static void update_save_modal_input(void)
 			g_forge.save_map_name[--g_forge.save_map_name_len] = 0;
 		}
 		prev_key[VK_BACK] = bk_down;
+	}
+	{
+		int esc_down = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+		if (esc_down && !prev_key[VK_ESCAPE])
+		{
+			g_forge.active_modal = _forge_modal_none;
+			prev_key[VK_ESCAPE] = esc_down;
+			return;
+		}
+		prev_key[VK_ESCAPE] = esc_down;
 	}
 	{
 		int ent_down = (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0;
@@ -1709,6 +2077,64 @@ static void forge_init_map_scenario_entities(void)
 	}
 }
 
+static int count_active_instances_for_catalog_entry(struct forge_catalog_entry const *ce)
+{
+	int i, count = 0;
+	if (!ce || !ce->tag_path[0])
+		return 0;
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		if (g_forge.live_instances[i].active &&
+			g_forge.live_instances[i].group_tag == ce->group_tag &&
+			_stricmp(g_forge.live_instances[i].tag_path, ce->tag_path) == 0)
+		{
+			count++;
+		}
+	}
+	return count;
+}
+
+static void format_clean_uppercase_item_name(char const *display_name, char *out_buf, size_t out_sz)
+{
+	char const *p = display_name ? display_name : "";
+	size_t i = 0;
+	if (!out_buf || out_sz == 0)
+		return;
+	/* Preserve "[c] " custom .ocetags badge while stripping generic "[WEAP] ", "[VEHI] ", "[SPAWN] ", "[KOTH] " prefixes */
+	if (_strnicmp(p, "[c]", 3) == 0)
+	{
+		p += 3;
+		while (*p == ' ')
+			p++;
+		if (out_sz >= 5)
+		{
+			out_buf[0] = '[';
+			out_buf[1] = 'c';
+			out_buf[2] = ']';
+			out_buf[3] = ' ';
+			i = 4;
+		}
+	}
+	else if (p[0] == '[')
+	{
+		char const *rb = strchr(p, ']');
+		if (rb)
+		{
+			p = rb + 1;
+			while (*p == ' ')
+				p++;
+		}
+	}
+	while (*p && i + 1 < out_sz)
+	{
+		char ch = *p++;
+		if (ch >= 'a' && ch <= 'z')
+			ch = (char)(ch - 'a' + 'A');
+		out_buf[i++] = ch;
+	}
+	out_buf[i] = '\0';
+}
+
 static char const *gametype_flags_label(uint16_t flags)
 {
 	if (flags == 0x0001u) return "CTF Only";
@@ -1735,21 +2161,64 @@ static uint16_t cycle_gametype_flags(uint16_t flags, int dir)
 	return modes[cur];
 }
 
+static void forge_cancel_or_release_held_item(void)
+{
+	if (g_forge.grabbed_live_index >= 0 && g_forge.grabbed_live_index < g_forge.live_instance_count)
+	{
+		if (g_forge.grabbed_is_new_spawn)
+		{
+			if (g_forge.koth_group_placing)
+			{
+				int k;
+				for (k = 0; k < 10; k++)
+				{
+					int32_t nidx = g_forge.koth_group_live_indices[k];
+					if (nidx >= 0 && nidx < g_forge.live_instance_count)
+						forge_3d_delete_instance(nidx, 1);
+				}
+				g_forge.koth_group_placing = 0;
+			}
+			else
+			{
+				forge_3d_delete_instance(g_forge.grabbed_live_index, 1);
+			}
+		}
+		else
+		{
+			forge_3d_move_instance(
+				g_forge.grabbed_live_index,
+				g_forge.grab_orig_x,
+				g_forge.grab_orig_y,
+				g_forge.grab_orig_z,
+				g_forge.grab_orig_yaw,
+				g_forge.grab_orig_pitch,
+				g_forge.grab_orig_roll,
+				1);
+		}
+	}
+	g_forge.grabbed_live_index = -1;
+	g_forge.grabbed_object_index = NONE;
+	g_forge.grabbed_is_new_spawn = 0;
+	g_forge.koth_group_placing = 0;
+}
+
 void forge_3d_update(float dt)
 {
-	static int prev_f1, prev_f2, prev_f4, prev_f5, prev_f6, prev_f8, prev_esc, prev_x, prev_bk, prev_lmb;
+	static int prev_f1, prev_f2, prev_f4, prev_f5, prev_f8, prev_esc, prev_x, prev_bk, prev_lmb;
 	static int prev_up, prev_down, prev_left, prev_right, prev_enter, prev_g, prev_z, prev_f, prev_del;
 	static int s_init_wait_ticks = 0;
 	static struct scenario *s_last_scen = NULL;
+	static int s_prev_modal = 0;
 	struct scenario *scen;
-	int cur_f1, cur_f2, cur_f4, cur_f5, cur_f6, cur_f8, cur_esc, cur_x, cur_bk, cur_lmb;
+	int cur_f1, cur_f2, cur_f4, cur_f5, cur_f8, cur_esc, cur_x, cur_bk, cur_lmb;
 	int cur_up, cur_down, cur_left, cur_right, cur_enter, cur_g, cur_z, cur_f, cur_del;
 
 	forge_runtime_init();
 
-	/* Only run Forge editor controls when inside a Forge session and not on the UI main menu map */
-	if (!g_forge_session_enabled)
-		return;
+	if (g_forge.active_modal == _forge_modal_save_copy_as && s_prev_modal != _forge_modal_save_copy_as)
+		s_save_modal_just_opened = 1;
+	s_prev_modal = g_forge.active_modal;
+
 	if (main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") == 0)
 		return;
 	scen = global_scenario_get();
@@ -1761,7 +2230,17 @@ void forge_3d_update(float dt)
 		s_init_wait_ticks = 0;
 		g_forge.monitor_cam_initialized = 0;
 		g_forge.live_instance_count = 0;
+		if (!g_forge_session_enabled)
+		{
+			/* When playing a saved Forge map in normal Multiplayer / Splitscreen outside Forge mode,
+			 * still load any non-baked or AI objects from [ForgeState] once on map load! */
+			forge_load_saved_map_state_if_present(main_get_map_name());
+		}
 	}
+
+	/* Only run Forge editor controls when inside a Forge session */
+	if (!g_forge_session_enabled)
+		return;
 
 	/* Point 4: When starting a game, spawn as the Spartan at a default player spawn point */
 	if (!g_forge.monitor_cam_initialized)
@@ -1918,7 +2397,6 @@ void forge_3d_update(float dt)
 	cur_f2 = (GetAsyncKeyState(VK_F2) & 0x8000) != 0;
 	cur_f4 = (GetAsyncKeyState(VK_F4) & 0x8000) != 0;
 	cur_f5 = (GetAsyncKeyState(VK_F5) & 0x8000) != 0;
-	cur_f6 = (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
 	cur_f8 = (GetAsyncKeyState(0x77) & 0x8000) != 0; /* VK_F8 */
 	cur_esc = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
 	cur_x = (GetAsyncKeyState('X') & 0x8000) != 0;
@@ -1936,6 +2414,8 @@ void forge_3d_update(float dt)
 	if (cur_f1 && !prev_f1)
 	{
 		long unit_idx = player_control_get_unit_index(0);
+		if (g_forge.grabbed_live_index >= 0)
+			forge_cancel_or_release_held_item();
 		g_forge.active_modal = _forge_modal_none;
 		if (g_forge.mode == _forge_mode_3d_monitor)
 		{
@@ -1996,10 +2476,15 @@ void forge_3d_update(float dt)
 			}
 			else
 			{
+				if (g_forge.grabbed_live_index >= 0)
+					forge_cancel_or_release_held_item();
 				g_forge.active_modal = _forge_modal_spawn_palette;
-				g_forge.h3_menu_stage = 0; /* Start on Halo 3 Category list */
-				if (g_forge.current_category == _forge_cat_bipeds || g_forge.current_category == _forge_cat_ai_squads)
+				g_forge.h3_menu_stage = 1; /* Unified single-stage tabbed menu: cycle categories with [<-] / [->] */
+				if (g_forge.current_category == _forge_cat_bipeds ||
+					g_forge.current_category == _forge_cat_ai_squads)
+				{
 					g_forge.current_category = _forge_cat_weapons;
+				}
 			}
 		}
 	}
@@ -2008,24 +2493,16 @@ void forge_3d_update(float dt)
 		g_forge.third_person_view = !g_forge.third_person_view;
 		forge_set_status("3rd-Person Forge View: %s", g_forge.third_person_view ? "ON" : "OFF");
 	}
+	/* F5 in-game is strictly for Quick Save only (available after initial save via Esc -> SAVE MAP..) */
 	if (cur_f5 && !prev_f5)
 	{
-		if (g_forge.active_modal == _forge_modal_save_copy_as)
-			g_forge.active_modal = _forge_modal_none;
-		else
-			forge_trigger_save_map_action();
-	}
-	if (cur_f6 && !prev_f6)
-	{
-		if (forge_is_multiplayer_session())
+		if (g_forge.has_saved_map_once && g_forge.save_map_name[0])
 		{
-			forge_set_status("Multiplayer Asset Guard: 'Add Tags to Cache' is disabled during live online sessions!");
+			forge_ui_save_copy_as(g_forge.save_map_name);
 		}
 		else
 		{
-			forge_runtime_reload_catalogs();
-			g_forge.active_modal = (g_forge.active_modal == _forge_modal_inject_custom_tags)
-				? _forge_modal_none : _forge_modal_inject_custom_tags;
+			forge_set_status("Quick Save unavailable: Use [Esc] -> SAVE MAP.. for initial save first");
 		}
 	}
 	if (cur_x && !prev_x && g_forge.mode == _forge_mode_3d_monitor && g_forge.grabbed_live_index >= 0)
@@ -2034,19 +2511,15 @@ void forge_3d_update(float dt)
 			? _forge_modal_none : _forge_modal_object_properties;
 		g_forge.props_cursor = 0;
 	}
-	if (cur_esc && !prev_esc && g_forge.active_modal != _forge_modal_none)
+	if (((cur_esc && !prev_esc) || (cur_bk && !prev_bk)) && g_forge.active_modal != _forge_modal_none && g_forge.active_modal != _forge_modal_save_copy_as)
 	{
-		if (g_forge.active_modal == _forge_modal_spawn_palette && g_forge.h3_menu_stage == 1)
-			g_forge.h3_menu_stage = 0;
-		else
-			g_forge.active_modal = _forge_modal_none;
+		g_forge.active_modal = _forge_modal_none;
 	}
 
 	prev_f1 = cur_f1;
 	prev_f2 = cur_f2;
 	prev_f4 = cur_f4;
 	prev_f5 = cur_f5;
-	prev_f6 = cur_f6;
 	prev_f8 = cur_f8;
 	prev_esc = cur_esc;
 	prev_x = cur_x;
@@ -2069,170 +2542,204 @@ void forge_3d_update(float dt)
 	cur_f = (GetAsyncKeyState('F') & 0x8000) != 0;
 	cur_del = ((GetAsyncKeyState(VK_DELETE) & 0x8000) || (GetAsyncKeyState(VK_BACK) & 0x8000)) != 0;
 
-	if (g_forge.active_modal == _forge_modal_inject_custom_tags)
-	{
-		if (cur_up && !prev_up && g_forge.donor_map_cursor > 0)
-			g_forge.donor_map_cursor--;
-		if (cur_down && !prev_down && g_forge.donor_map_cursor + 1 < g_forge.donor_map_count)
-			g_forge.donor_map_cursor++;
-		if (cur_enter && !prev_enter && g_forge.donor_map_count > 0)
-		{
-			forge_ui_inject_custom_map(g_forge.donor_map_files[g_forge.donor_map_cursor]);
-			g_forge.active_modal = _forge_modal_none;
-		}
-		goto update_prev_keys;
-	}
-
-	/* Halo 3-Style 2-Stage Spawn Palette Menu */
+	/* Unified Tabbed Spawn Palette Menu: [<-] / [->] switches category, [Up] / [Down] / Scroll selects item */
 	if (g_forge.active_modal == _forge_modal_spawn_palette)
 	{
-		if (g_forge.h3_menu_stage == 0)
+		int filtered[512];
+		int fcount;
+		int const visible_rows = 10;
+
+		g_forge.h3_menu_stage = 1;
+		if (g_forge.current_category == _forge_cat_bipeds ||
+			g_forge.current_category == _forge_cat_ai_squads)
 		{
-			/* Stage 0: Category Selection (skipping Bipeds & AI Characters) */
-			if (cur_up && !prev_up)
-			{
-				do {
-					g_forge.current_category = (enum forge_palette_category)(
-						(g_forge.current_category + NUMBER_OF_FORGE_PALETTE_CATEGORIES - 1) % NUMBER_OF_FORGE_PALETTE_CATEGORIES);
-				} while (g_forge.current_category == _forge_cat_bipeds || g_forge.current_category == _forge_cat_ai_squads);
-			}
-			if (cur_down && !prev_down)
-			{
-				do {
-					g_forge.current_category = (enum forge_palette_category)(
-						(g_forge.current_category + 1) % NUMBER_OF_FORGE_PALETTE_CATEGORIES);
-				} while (g_forge.current_category == _forge_cat_bipeds || g_forge.current_category == _forge_cat_ai_squads);
-			}
-			if ((cur_enter && !prev_enter) || (cur_right && !prev_right))
-			{
-				g_forge.h3_menu_stage = 1;
-				g_forge.palette_cursor = 0;
-				g_forge.palette_scroll = 0;
-			}
+			g_forge.current_category = _forge_cat_weapons;
 		}
-		else
+
+		if (cur_left && !prev_left)
 		{
-			/* Stage 1: Item Selection inside Category (9 visible rows) */
-			int filtered[512];
-			int fcount = get_filtered_catalog_indices(filtered, 512);
-			int const visible_rows = 9;
+			do {
+				g_forge.current_category = (enum forge_palette_category)(
+					(g_forge.current_category + NUMBER_OF_FORGE_PALETTE_CATEGORIES - 1) % NUMBER_OF_FORGE_PALETTE_CATEGORIES);
+			} while (g_forge.current_category == _forge_cat_bipeds ||
+					 g_forge.current_category == _forge_cat_ai_squads);
+			g_forge.palette_cursor = 0;
+			g_forge.palette_scroll = 0;
+		}
+		if (cur_right && !prev_right)
+		{
+			do {
+				g_forge.current_category = (enum forge_palette_category)(
+					(g_forge.current_category + 1) % NUMBER_OF_FORGE_PALETTE_CATEGORIES);
+			} while (g_forge.current_category == _forge_cat_bipeds ||
+					 g_forge.current_category == _forge_cat_ai_squads);
+			g_forge.palette_cursor = 0;
+			g_forge.palette_scroll = 0;
+		}
 
-			if ((cur_left && !prev_left) || (cur_bk && !prev_bk))
-			{
-				g_forge.h3_menu_stage = 0;
-			}
-			if (cur_up && !prev_up && g_forge.palette_cursor > 0)
-			{
-				g_forge.palette_cursor--;
-				if (g_forge.palette_cursor < g_forge.palette_scroll)
-					g_forge.palette_scroll = g_forge.palette_cursor;
-			}
-			if (cur_down && !prev_down && g_forge.palette_cursor + 1 < fcount)
-			{
-				g_forge.palette_cursor++;
-				if (g_forge.palette_cursor >= g_forge.palette_scroll + visible_rows)
-					g_forge.palette_scroll = g_forge.palette_cursor - (visible_rows - 1);
-			}
-			if (cur_enter && !prev_enter && fcount > 0 && g_forge.palette_cursor < fcount)
-			{
-				struct forge_catalog_entry const *ce = &g_forge.catalog[filtered[g_forge.palette_cursor]];
-				float sx = g_forge.ray_hit_valid ? g_forge.ray_hit_x : (g_forge.cam_x + (float)cos((double)g_forge.cam_yaw) * 4.0f);
-				float sy = g_forge.ray_hit_valid ? g_forge.ray_hit_y : (g_forge.cam_y + (float)sin((double)g_forge.cam_yaw) * 4.0f);
-				float sz = g_forge.ray_hit_valid ? (g_forge.ray_hit_z + 0.15f) : g_forge.cam_z;
-				int32_t spawned_idx = -1;
+		fcount = get_filtered_catalog_indices(filtered, 512);
+		if (g_forge.palette_cursor >= fcount)
+			g_forge.palette_cursor = (fcount > 0) ? (fcount - 1) : 0;
+		if (g_forge.palette_scroll > g_forge.palette_cursor)
+			g_forge.palette_scroll = g_forge.palette_cursor;
 
-				g_forge.koth_group_placing = 0;
+		if (cur_up && !prev_up && g_forge.palette_cursor > 0)
+		{
+			g_forge.palette_cursor--;
+			if (g_forge.palette_cursor < g_forge.palette_scroll)
+				g_forge.palette_scroll = g_forge.palette_cursor;
+		}
+		if (cur_down && !prev_down && g_forge.palette_cursor + 1 < fcount)
+		{
+			g_forge.palette_cursor++;
+			if (g_forge.palette_cursor >= g_forge.palette_scroll + visible_rows)
+				g_forge.palette_scroll = g_forge.palette_cursor - (visible_rows - 1);
+		}
+		if (cur_enter && !prev_enter && fcount > 0 && g_forge.palette_cursor < fcount)
+		{
+			struct forge_catalog_entry const *ce = &g_forge.catalog[filtered[g_forge.palette_cursor]];
+			real_vector3d cam_fwd, cam_up;
+			real_point3d ray_orig;
+			real_vector3d ray_vec;
+			struct collision_result coll;
+			unsigned long cflags = FLAG(_collision_test_structure_bit) |
+								   FLAG(_collision_test_objects_bit) |
+								   FLAG(_collision_test_front_facing_surfaces_bit);
+			short p_idx = local_player_get_player_index(0);
+			long local_unit = (p_idx != NONE && player_get(p_idx)) ? player_get(p_idx)->unit_index : NONE;
+			float spawn_dist = 4.5f;
+			float sx, sy, sz;
+			int32_t spawned_idx = -1;
 
-				/* Item 4: Spawning [KOTH] Hill Marker drops a 4m diameter circle made of 10 linked points! */
-				if (ce->group_tag == 'flag' && strstr(ce->tag_path, "koth") != NULL)
+			if (g_forge.grabbed_live_index >= 0)
+				forge_cancel_or_release_held_item();
+
+			/* Perform a fresh raycast along the current camera view ray so newly spawned items
+			 * stick directly to the placement cursor and camera angle! */
+			euler_to_forward_up(g_forge.cam_yaw, g_forge.cam_pitch, g_forge.cam_roll, &cam_fwd, &cam_up);
+			ray_orig.x = g_forge.cam_x;
+			ray_orig.y = g_forge.cam_y;
+			ray_orig.z = g_forge.cam_z;
+			ray_vec.i = cam_fwd.i * 20.0f;
+			ray_vec.j = cam_fwd.j * 20.0f;
+			ray_vec.k = cam_fwd.k * 20.0f;
+			memset(&coll, 0, sizeof(coll));
+			if (collision_test_vector(cflags, &ray_orig, &ray_vec, local_unit, &coll))
+			{
+				float dx = coll.point.x - g_forge.cam_x;
+				float dy = coll.point.y - g_forge.cam_y;
+				float dz = coll.point.z - g_forge.cam_z;
+				spawn_dist = (float)sqrt((double)(dx * dx + dy * dy + dz * dz));
+				if (spawn_dist < 1.5f) spawn_dist = 1.5f;
+				if (spawn_dist > 20.0f) spawn_dist = 20.0f;
+				g_forge.ray_hit_valid = 1;
+				g_forge.ray_hit_x = coll.point.x;
+				g_forge.ray_hit_y = coll.point.y;
+				g_forge.ray_hit_z = coll.point.z;
+				sx = coll.point.x;
+				sy = coll.point.y;
+				sz = coll.point.z + 0.08f;
+			}
+			else
+			{
+				spawn_dist = 4.5f;
+				sx = g_forge.cam_x + cam_fwd.i * spawn_dist;
+				sy = g_forge.cam_y + cam_fwd.j * spawn_dist;
+				sz = g_forge.cam_z + cam_fwd.k * spawn_dist;
+			}
+
+			g_forge.koth_group_placing = 0;
+
+			/* Item 4: Spawning [KOTH] Hill Marker drops a 4m diameter circle made of 10 linked points! */
+			if (ce->group_tag == 'flag' && strstr(ce->tag_path, "koth") != NULL)
+			{
+				int cand_id, j, k, used;
+				int16_t hill_id = 0;
+				float r_init = 2.0f * (1.0f / 3.048f); /* 2.0m radius = 4.0m diameter in Halo world units */
+
+				for (cand_id = 0; cand_id < 16; cand_id++)
 				{
-					int cand_id, j, k, used;
-					int16_t hill_id = 0;
-					float r_init = 2.0f * (1.0f / 3.048f); /* 2.0m radius = 4.0m diameter in Halo world units */
-
-					for (cand_id = 0; cand_id < 16; cand_id++)
+					used = 0;
+					for (j = 0; j < g_forge.live_instance_count; j++)
 					{
-						used = 0;
-						for (j = 0; j < g_forge.live_instance_count; j++)
+						if (g_forge.live_instances[j].active &&
+							g_forge.live_instances[j].group_tag == 'flag' &&
+							g_forge.live_instances[j].netgame_flag_type == 8 &&
+							g_forge.live_instances[j].team_designator == cand_id)
 						{
-							if (g_forge.live_instances[j].active &&
-								g_forge.live_instances[j].group_tag == 'flag' &&
-								g_forge.live_instances[j].netgame_flag_type == 8 &&
-								g_forge.live_instances[j].team_designator == cand_id)
-							{
-								used = 1;
-								break;
-							}
-						}
-						if (!used)
-						{
-							hill_id = (int16_t)cand_id;
+							used = 1;
 							break;
 						}
 					}
-
-					g_forge.koth_group_hill_id = hill_id;
-					g_forge.koth_group_radius = r_init;
-					for (k = 0; k < 10; k++)
+					if (!used)
 					{
-						float ang = (float)k * (6.283185307f / 10.0f);
-						float nx = sx + r_init * (float)cos((double)ang);
-						float ny = sy + r_init * (float)sin((double)ang);
-						int32_t nidx = forge_3d_spawn_object_at(
-							ce->group_tag,
-							ce->tag_path,
-							ce->source_cache_id,
-							nx, ny, sz,
-							ang, 0.0f, 0.0f,
-							hill_id,
-							1);
-						g_forge.koth_group_live_indices[k] = nidx;
-						if (k == 0)
-							spawned_idx = nidx;
+						hill_id = (int16_t)cand_id;
+						break;
 					}
-					if (spawned_idx >= 0)
-						g_forge.koth_group_placing = 1;
 				}
-				else
+
+				g_forge.koth_group_hill_id = hill_id;
+				g_forge.koth_group_radius = r_init;
+				for (k = 0; k < 10; k++)
 				{
-					spawned_idx = forge_3d_spawn_object_at(
+					float ang = (float)k * (6.283185307f / 10.0f);
+					float nx = sx + r_init * (float)cos((double)ang);
+					float ny = sy + r_init * (float)sin((double)ang);
+					int32_t nidx = forge_3d_spawn_object_at(
 						ce->group_tag,
 						ce->tag_path,
 						ce->source_cache_id,
-						sx, sy, sz,
-						g_forge.cam_yaw, 0.0f, 0.0f,
-						0,
+						nx, ny, sz,
+						ang, 0.0f, 0.0f,
+						hill_id,
 						1);
+					g_forge.koth_group_live_indices[k] = nidx;
+					if (k == 0)
+						spawned_idx = nidx;
 				}
+				if (spawned_idx >= 0)
+					g_forge.koth_group_placing = 1;
+			}
+			else
+			{
+				spawned_idx = forge_3d_spawn_object_at(
+					ce->group_tag,
+					ce->tag_path,
+					ce->source_cache_id,
+					sx, sy, sz,
+					g_forge.cam_yaw, 0.0f, 0.0f,
+					0,
+					1);
+			}
 
-				/* Hitting Enter confirms the previewed item and attaches it to the placement beam */
-				if (!(GetAsyncKeyState(VK_SHIFT) & 0x8000))
+			/* Hitting Enter confirms the previewed item and attaches it to the placement beam */
+			if (!(GetAsyncKeyState(VK_SHIFT) & 0x8000))
+			{
+				g_forge.active_modal = _forge_modal_none;
+				if (spawned_idx >= 0 && g_forge.mode == _forge_mode_3d_monitor)
 				{
-					g_forge.active_modal = _forge_modal_none;
-					if (spawned_idx >= 0 && g_forge.mode == _forge_mode_3d_monitor)
+					g_forge.grabbed_live_index = spawned_idx;
+					g_forge.grabbed_object_index = g_forge.live_instances[spawned_idx].object_index;
+					g_forge.grabbed_is_new_spawn = 1;
+					g_forge.grab_distance = spawn_dist;
+					g_forge.grab_yaw = g_forge.cam_yaw;
+					g_forge.grab_pitch = 0.0f;
+					g_forge.grab_roll = 0.0f;
+					if (g_forge.koth_group_placing)
 					{
-						g_forge.grabbed_live_index = spawned_idx;
-						g_forge.grabbed_object_index = g_forge.live_instances[spawned_idx].object_index;
-						g_forge.grab_distance = 4.5f;
-						g_forge.grab_yaw = g_forge.cam_yaw;
-						g_forge.grab_pitch = 0.0f;
-						g_forge.grab_roll = 0.0f;
-						if (g_forge.koth_group_placing)
-						{
-							forge_set_status("Placing 10-Pt KOTH Hill #%d (4.0m Dia) [Hold C/Shift+Scroll Radius / Hold Z Floor / Click Place]",
-								g_forge.koth_group_hill_id);
-						}
-						else
-						{
-							forge_set_status("Placing '%s' [Scroll 1-30m / Hold Z+Click Floor / R Rotate / Click Place]",
-								ce->display_name);
-						}
+						forge_set_status("KOTH Hill #%d  [C+Scroll] Radius  [Z] Floor  [Click] Place",
+							g_forge.koth_group_hill_id);
+					}
+					else
+					{
+						forge_set_status("'%s'  [Scroll] Dist  [Z] Floor  [R] Rot  [Click] Place",
+							ce->display_name);
 					}
 				}
-				/* Prevent this same Enter press from immediately dropping the newly spawned item */
-				prev_enter = 1;
-				goto update_prev_keys;
 			}
+			/* Prevent this same Enter press from immediately dropping the newly spawned item */
+			prev_enter = 1;
+			goto update_prev_keys;
 		}
 		goto update_prev_keys;
 	}
@@ -2335,12 +2842,24 @@ void forge_3d_update(float dt)
 		halo_linux_mouse_look(0, &dyaw, &dpitch);
 		g_forge.cam_yaw += dyaw;
 		g_forge.cam_pitch += dpitch;
+		if (g_forge.grabbed_live_index >= 0)
+			g_forge.grab_yaw += dyaw;
 
 		/* Optional keyboard fine rotation when modal is closed */
 		if (g_forge.active_modal == _forge_modal_none)
 		{
-			if (GetAsyncKeyState(VK_LEFT) & 0x8000) g_forge.cam_yaw += 1.6f * dt;
-			if (GetAsyncKeyState(VK_RIGHT) & 0x8000) g_forge.cam_yaw -= 1.6f * dt;
+			if (GetAsyncKeyState(VK_LEFT) & 0x8000)
+			{
+				g_forge.cam_yaw += 1.6f * dt;
+				if (g_forge.grabbed_live_index >= 0)
+					g_forge.grab_yaw += 1.6f * dt;
+			}
+			if (GetAsyncKeyState(VK_RIGHT) & 0x8000)
+			{
+				g_forge.cam_yaw -= 1.6f * dt;
+				if (g_forge.grabbed_live_index >= 0)
+					g_forge.grab_yaw -= 1.6f * dt;
+			}
 			if (GetAsyncKeyState(VK_UP) & 0x8000) g_forge.cam_pitch += 1.2f * dt;
 			if (GetAsyncKeyState(VK_DOWN) & 0x8000) g_forge.cam_pitch -= 1.2f * dt;
 		}
@@ -2352,33 +2871,192 @@ void forge_3d_update(float dt)
 		right_vec.j = -(float)cos((double)g_forge.cam_yaw);
 		right_vec.k = 0.0f;
 
-		/* 6DOF Monitor Flight (WASD + Space/E up + Ctrl/Q down) */
-		if (GetAsyncKeyState('W') & 0x8000)
+		/* 6DOF Monitor Flight (WASD + Space/E up + Ctrl/Q down) with BSP collision & map bounds clamping */
 		{
-			g_forge.cam_x += fwd.i * spd;
-			g_forge.cam_y += fwd.j * spd;
-			g_forge.cam_z += fwd.k * spd;
+			float move_dx = 0.0f, move_dy = 0.0f, move_dz = 0.0f;
+			if (GetAsyncKeyState('W') & 0x8000)
+			{
+				move_dx += fwd.i * spd;
+				move_dy += fwd.j * spd;
+				move_dz += fwd.k * spd;
+			}
+			if (GetAsyncKeyState('S') & 0x8000)
+			{
+				move_dx -= fwd.i * spd;
+				move_dy -= fwd.j * spd;
+				move_dz -= fwd.k * spd;
+			}
+			if (GetAsyncKeyState('D') & 0x8000)
+			{
+				move_dx += right_vec.i * spd;
+				move_dy += right_vec.j * spd;
+			}
+			if (GetAsyncKeyState('A') & 0x8000)
+			{
+				move_dx -= right_vec.i * spd;
+				move_dy -= right_vec.j * spd;
+			}
+			if ((GetAsyncKeyState(VK_SPACE) & 0x8000) || (GetAsyncKeyState('E') & 0x8000))
+				move_dz += spd;
+			if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) || (GetAsyncKeyState('Q') & 0x8000))
+				move_dz -= spd;
+
+			if (move_dx != 0.0f || move_dy != 0.0f || move_dz != 0.0f)
+			{
+				float move_len = (float)sqrt((double)(move_dx * move_dx + move_dy * move_dy + move_dz * move_dz));
+				if (move_len > 0.0001f)
+				{
+					real_point3d start_pt, target_pt;
+					real_vector3d move_vec, ray_vec;
+					struct collision_result pill_coll, ray_coll;
+					int hit_pill, hit_ray;
+					float pill_rad = 0.38f;
+					float pad = 0.42f;
+					unsigned long pill_flags = FLAG(_collision_test_structure_bit);
+					unsigned long ray_flags = FLAG(_collision_test_structure_bit) |
+											  FLAG(_collision_test_front_facing_surfaces_bit) |
+											  FLAG(_collision_test_back_facing_surfaces_bit);
+					struct structure_bsp const *bsp = global_structure_bsp_get();
+
+					start_pt.x = g_forge.cam_x;
+					start_pt.y = g_forge.cam_y;
+					start_pt.z = g_forge.cam_z;
+
+					move_vec.i = move_dx;
+					move_vec.j = move_dy;
+					move_vec.k = move_dz;
+
+					ray_vec.i = move_dx * ((move_len + pad) / move_len);
+					ray_vec.j = move_dy * ((move_len + pad) / move_len);
+					ray_vec.k = move_dz * ((move_len + pad) / move_len);
+
+					memset(&pill_coll, 0, sizeof(pill_coll));
+					memset(&ray_coll, 0, sizeof(ray_coll));
+					hit_pill = collision_test_pill(pill_flags, &start_pt, &move_vec, pill_rad, NONE, &pill_coll) ? 1 : 0;
+					hit_ray = collision_test_vector(ray_flags, &start_pt, &ray_vec, NONE, &ray_coll) ? 1 : 0;
+
+					if (hit_pill || hit_ray)
+					{
+						/* Use whichever collision hit closer; pill catches two-sided player_clip & skybox rims */
+						struct collision_result coll = hit_pill ? pill_coll : ray_coll;
+						float allow;
+						float vn;
+
+						if (hit_pill && hit_ray)
+						{
+							float pill_allow = pill_coll.t * move_len - 0.02f;
+							float ray_allow = ray_coll.t * (move_len + pad) - pad;
+							if (ray_allow < pill_allow)
+							{
+								coll = ray_coll;
+								allow = ray_allow;
+							}
+							else
+							{
+								coll = pill_coll;
+								allow = pill_allow;
+							}
+						}
+						else if (hit_pill)
+						{
+							allow = pill_coll.t * move_len - 0.02f;
+						}
+						else
+						{
+							allow = ray_coll.t * (move_len + pad) - pad;
+						}
+
+						if (allow < 0.0f)
+							allow = 0.0f;
+						target_pt.x = start_pt.x + (move_dx / move_len) * allow;
+						target_pt.y = start_pt.y + (move_dy / move_len) * allow;
+						target_pt.z = start_pt.z + (move_dz / move_len) * allow;
+
+						/* Attempt wall-slide with remaining movement projected onto hit plane */
+						vn = move_dx * coll.plane.n.i + move_dy * coll.plane.n.j + move_dz * coll.plane.n.k;
+						if (vn < 0.0f)
+						{
+							float slide_dx = move_dx - vn * coll.plane.n.i;
+							float slide_dy = move_dy - vn * coll.plane.n.j;
+							float slide_dz = move_dz - vn * coll.plane.n.k;
+							float slide_len = (float)sqrt((double)(slide_dx * slide_dx + slide_dy * slide_dy + slide_dz * slide_dz));
+							if (slide_len > 0.0001f)
+							{
+								real_vector3d slide_vec, slide_ray;
+								struct collision_result slide_pill_coll, slide_ray_coll;
+								slide_vec.i = slide_dx;
+								slide_vec.j = slide_dy;
+								slide_vec.k = slide_dz;
+								slide_ray.i = slide_dx * ((slide_len + pad) / slide_len);
+								slide_ray.j = slide_dy * ((slide_len + pad) / slide_len);
+								slide_ray.k = slide_dz * ((slide_len + pad) / slide_len);
+								memset(&slide_pill_coll, 0, sizeof(slide_pill_coll));
+								memset(&slide_ray_coll, 0, sizeof(slide_ray_coll));
+								if (!collision_test_pill(pill_flags, &target_pt, &slide_vec, pill_rad, NONE, &slide_pill_coll) &&
+									!collision_test_vector(ray_flags, &target_pt, &slide_ray, NONE, &slide_ray_coll))
+								{
+									target_pt.x += slide_dx;
+									target_pt.y += slide_dy;
+									target_pt.z += slide_dz;
+								}
+							}
+						}
+					}
+					else
+					{
+						target_pt.x = start_pt.x + move_dx;
+						target_pt.y = start_pt.y + move_dy;
+						target_pt.z = start_pt.z + move_dz;
+					}
+
+					/* Clamp strictly inside visible structure BSP world_bounds so Monitor cannot fly above skybox/player_clip ceiling */
+					if (bsp)
+					{
+						float margin_xy = 0.60f;
+						float margin_z_low = 0.60f;
+						float margin_z_high = 0.85f;
+						if (bsp->world_bounds.x1 - bsp->world_bounds.x0 > 2.0f)
+						{
+							if (target_pt.x < bsp->world_bounds.x0 + margin_xy)
+								target_pt.x = bsp->world_bounds.x0 + margin_xy;
+							if (target_pt.x > bsp->world_bounds.x1 - margin_xy)
+								target_pt.x = bsp->world_bounds.x1 - margin_xy;
+						}
+						if (bsp->world_bounds.y1 - bsp->world_bounds.y0 > 2.0f)
+						{
+							if (target_pt.y < bsp->world_bounds.y0 + margin_xy)
+								target_pt.y = bsp->world_bounds.y0 + margin_xy;
+							if (target_pt.y > bsp->world_bounds.y1 - margin_xy)
+								target_pt.y = bsp->world_bounds.y1 - margin_xy;
+						}
+						if (bsp->world_bounds.z1 - bsp->world_bounds.z0 > 2.0f)
+						{
+							if (target_pt.z < bsp->world_bounds.z0 + margin_z_low)
+								target_pt.z = bsp->world_bounds.z0 + margin_z_low;
+							if (target_pt.z > bsp->world_bounds.z1 - margin_z_high)
+								target_pt.z = bsp->world_bounds.z1 - margin_z_high;
+						}
+					}
+
+					/* Only commit movement if destination remains inside valid BSP leaf bounds and has unobstructed line-of-sight from start_pt */
+					if (scenario_leaf_index_from_point(&target_pt) != NONE)
+					{
+						real_vector3d verify_vec;
+						struct collision_result verify_coll;
+						verify_vec.i = target_pt.x - start_pt.x;
+						verify_vec.j = target_pt.y - start_pt.y;
+						verify_vec.k = target_pt.z - start_pt.z;
+						memset(&verify_coll, 0, sizeof(verify_coll));
+						if (!collision_test_vector(ray_flags, &start_pt, &verify_vec, NONE, &verify_coll))
+						{
+							g_forge.cam_x = target_pt.x;
+							g_forge.cam_y = target_pt.y;
+							g_forge.cam_z = target_pt.z;
+						}
+					}
+				}
+			}
 		}
-		if (GetAsyncKeyState('S') & 0x8000)
-		{
-			g_forge.cam_x -= fwd.i * spd;
-			g_forge.cam_y -= fwd.j * spd;
-			g_forge.cam_z -= fwd.k * spd;
-		}
-		if (GetAsyncKeyState('D') & 0x8000)
-		{
-			g_forge.cam_x += right_vec.i * spd;
-			g_forge.cam_y += right_vec.j * spd;
-		}
-		if (GetAsyncKeyState('A') & 0x8000)
-		{
-			g_forge.cam_x -= right_vec.i * spd;
-			g_forge.cam_y -= right_vec.j * spd;
-		}
-		if ((GetAsyncKeyState(VK_SPACE) & 0x8000) || (GetAsyncKeyState('E') & 0x8000))
-			g_forge.cam_z += spd;
-		if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) || (GetAsyncKeyState('Q') & 0x8000))
-			g_forge.cam_z -= spd;
 
 		/* Points 1, 2 & 8: Sync local player's unit position & facing to Monitor position AND keep Invulnerable! */
 		{
@@ -2664,9 +3342,8 @@ void forge_3d_update(float dt)
 			forge_set_status("Rotation Snapping: %s", snap_names[g_forge.snap_mode]);
 		}
 
-		/* Grab / Release / Confirm Placement of Object on Physics Beam (F, Left Click, or Enter when holding) */
-		if ((cur_f && !prev_f) ||
-			(g_forge.active_modal == _forge_modal_none && cur_lmb && !prev_lmb) ||
+		/* Grab / Release / Confirm Placement of Object on Physics Beam (Left Click or Enter when holding) */
+		if ((g_forge.active_modal == _forge_modal_none && cur_lmb && !prev_lmb) ||
 			(g_forge.active_modal == _forge_modal_none && g_forge.grabbed_live_index >= 0 && cur_enter && !prev_enter))
 		{
 			if (g_forge.grabbed_live_index >= 0)
@@ -2701,6 +3378,7 @@ void forge_3d_update(float dt)
 				}
 				g_forge.grabbed_live_index = -1;
 				g_forge.grabbed_object_index = NONE;
+				g_forge.grabbed_is_new_spawn = 0;
 			}
 			else
 			{
@@ -2795,6 +3473,13 @@ void forge_3d_update(float dt)
 					g_forge.koth_group_placing = 0;
 					g_forge.grabbed_live_index = best;
 					g_forge.grabbed_object_index = inst->object_index;
+					g_forge.grabbed_is_new_spawn = 0;
+					g_forge.grab_orig_x = inst->x;
+					g_forge.grab_orig_y = inst->y;
+					g_forge.grab_orig_z = inst->z;
+					g_forge.grab_orig_yaw = inst->yaw;
+					g_forge.grab_orig_pitch = inst->pitch;
+					g_forge.grab_orig_roll = inst->roll;
 					g_forge.grab_distance = (float)sqrt((double)(dx * dx + dy * dy + dz * dz));
 					if (g_forge.grab_distance < 1.0f) g_forge.grab_distance = 1.0f;
 					if (g_forge.grab_distance > 20.0f) g_forge.grab_distance = 20.0f;
@@ -2853,11 +3538,41 @@ void forge_3d_update(float dt)
 			if (GetAsyncKeyState('R') & 0x8000)
 				g_forge.grab_yaw += 1.6f * dt;
 
-			tx = g_forge.cam_x + fwd.i * g_forge.grab_distance;
-			ty = g_forge.cam_y + fwd.j * g_forge.grab_distance;
-			tz = g_forge.cam_z + fwd.k * g_forge.grab_distance;
+			/* Keep the placement cursor and held object locked to the camera crosshair ray
+			 * (and clamped against any closer BSP/surface hit along the beam) */
+			{
+				real_point3d beam_orig;
+				real_vector3d beam_vec;
+				struct collision_result bcoll;
+				long ignore_grab = forge_valid_object_get(g_forge.grabbed_object_index) ? g_forge.grabbed_object_index : NONE;
+				beam_orig.x = g_forge.cam_x;
+				beam_orig.y = g_forge.cam_y;
+				beam_orig.z = g_forge.cam_z;
+				beam_vec.i = fwd.i * g_forge.grab_distance;
+				beam_vec.j = fwd.j * g_forge.grab_distance;
+				beam_vec.k = fwd.k * g_forge.grab_distance;
+				memset(&bcoll, 0, sizeof(bcoll));
+				if (collision_test_vector(
+					FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
+					&beam_orig, &beam_vec, ignore_grab, &bcoll))
+				{
+					tx = bcoll.point.x + bcoll.plane.n.i * 0.05f;
+					ty = bcoll.point.y + bcoll.plane.n.j * 0.05f;
+					tz = bcoll.point.z + bcoll.plane.n.k * 0.05f;
+				}
+				else
+				{
+					tx = g_forge.cam_x + fwd.i * g_forge.grab_distance;
+					ty = g_forge.cam_y + fwd.j * g_forge.grab_distance;
+					tz = g_forge.cam_z + fwd.k * g_forge.grab_distance;
+				}
+				g_forge.ray_hit_valid = 1;
+				g_forge.ray_hit_x = tx;
+				g_forge.ray_hit_y = ty;
+				g_forge.ray_hit_z = tz;
+			}
 
-			/* Point 5: Hold Z to continuously snap held object to floor, then Click (or Enter/F) to place on ground! */
+			/* Hold Z to continuously snap held object to floor, then Click (or Enter) to place on ground! */
 			if (cur_z)
 			{
 				real_point3d down_orig;
@@ -2878,6 +3593,73 @@ void forge_3d_update(float dt)
 					tz = gcoll.point.z + 0.08f;
 					if (!prev_z)
 						forge_set_status("Snapping to Floor (Z=%.2f) [Hold Z + Click to Place on Ground]", tz);
+				}
+			}
+
+			/* Hold/Press F to Snap to Surface (snaps position and aligns object Up vector to the surface normal) */
+			if (cur_f)
+			{
+				real_point3d surf_orig;
+				real_vector3d surf_vec;
+				struct collision_result scoll;
+				long ignore_grab = forge_valid_object_get(g_forge.grabbed_object_index) ? g_forge.grabbed_object_index : NONE;
+				surf_orig.x = g_forge.cam_x;
+				surf_orig.y = g_forge.cam_y;
+				surf_orig.z = g_forge.cam_z;
+				surf_vec.i = fwd.i * 30.0f;
+				surf_vec.j = fwd.j * 30.0f;
+				surf_vec.k = fwd.k * 30.0f;
+				memset(&scoll, 0, sizeof(scoll));
+				if (collision_test_vector(
+					FLAG(_collision_test_structure_bit) | FLAG(_collision_test_objects_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
+					&surf_orig, &surf_vec, ignore_grab, &scoll))
+				{
+					real_vector3d surf_up = scoll.plane.n;
+					real_vector3d ref_fwd, surf_fwd;
+					float dot_fu, flen;
+					tx = scoll.point.x + surf_up.i * 0.05f;
+					ty = scoll.point.y + surf_up.j * 0.05f;
+					tz = scoll.point.z + surf_up.k * 0.05f;
+					g_forge.ray_hit_x = tx;
+					g_forge.ray_hit_y = ty;
+					g_forge.ray_hit_z = tz;
+					ref_fwd.i = (float)cos((double)g_forge.grab_yaw);
+					ref_fwd.j = (float)sin((double)g_forge.grab_yaw);
+					ref_fwd.k = 0.0f;
+					dot_fu = ref_fwd.i * surf_up.i + ref_fwd.j * surf_up.j + ref_fwd.k * surf_up.k;
+					surf_fwd.i = ref_fwd.i - surf_up.i * dot_fu;
+					surf_fwd.j = ref_fwd.j - surf_up.j * dot_fu;
+					surf_fwd.k = ref_fwd.k - surf_up.k * dot_fu;
+					flen = (float)sqrt((double)(surf_fwd.i * surf_fwd.i + surf_fwd.j * surf_fwd.j + surf_fwd.k * surf_fwd.k));
+					if (flen < 0.001f)
+					{
+						dot_fu = fwd.i * surf_up.i + fwd.j * surf_up.j + fwd.k * surf_up.k;
+						surf_fwd.i = fwd.i - surf_up.i * dot_fu;
+						surf_fwd.j = fwd.j - surf_up.j * dot_fu;
+						surf_fwd.k = fwd.k - surf_up.k * dot_fu;
+						flen = (float)sqrt((double)(surf_fwd.i * surf_fwd.i + surf_fwd.j * surf_fwd.j + surf_fwd.k * surf_fwd.k));
+					}
+					if (flen < 0.001f)
+					{
+						surf_fwd.i = 0.0f;
+						surf_fwd.j = 0.0f;
+						surf_fwd.k = (surf_up.i > 0.0f) ? -1.0f : 1.0f;
+						dot_fu = surf_fwd.i * surf_up.i + surf_fwd.j * surf_up.j + surf_fwd.k * surf_up.k;
+						surf_fwd.i -= surf_up.i * dot_fu;
+						surf_fwd.j -= surf_up.j * dot_fu;
+						surf_fwd.k -= surf_up.k * dot_fu;
+						flen = (float)sqrt((double)(surf_fwd.i * surf_fwd.i + surf_fwd.j * surf_fwd.j + surf_fwd.k * surf_fwd.k));
+					}
+					if (flen > 0.0001f)
+					{
+						surf_fwd.i /= flen;
+						surf_fwd.j /= flen;
+						surf_fwd.k /= flen;
+						forward_up_to_euler(&surf_fwd, &surf_up, &g_forge.grab_yaw, &g_forge.grab_pitch, &g_forge.grab_roll);
+					}
+					if (!prev_f)
+						forge_set_status("Snapped to Surface (Normal=%.2f,%.2f,%.2f) [Hold F + Click to Place]",
+							surf_up.i, surf_up.j, surf_up.k);
 				}
 			}
 
@@ -2948,6 +3730,7 @@ void forge_3d_update(float dt)
 			}
 			g_forge.grabbed_live_index = -1;
 			g_forge.grabbed_object_index = NONE;
+			g_forge.grabbed_is_new_spawn = 0;
 		}
 	}
 	else
@@ -2990,10 +3773,64 @@ void forge_3d_apply_monitor_camera(short local_player_index)
 		euler_to_forward_up(g_forge.cam_yaw, g_forge.cam_pitch, g_forge.cam_roll, &cmd.forward, &cmd.up);
 		if (g_forge.third_person_view)
 		{
-			/* Pull camera back 2.4 world units behind Monitor so player sees their Monitor body */
-			cmd.focus_position.x = g_forge.cam_x - cmd.forward.i * 2.4f;
-			cmd.focus_position.y = g_forge.cam_y - cmd.forward.j * 2.4f;
-			cmd.focus_position.z = g_forge.cam_z - cmd.forward.k * 2.4f + 0.25f;
+			/* Pull camera back 2.4 world units behind Monitor, clamped against BSP/skybox walls */
+			real_point3d mon_pt, cam_pt;
+			real_vector3d pullback_vec;
+			struct collision_result cam_coll;
+			unsigned long cflags = FLAG(_collision_test_structure_bit) |
+								   FLAG(_collision_test_front_facing_surfaces_bit) |
+								   FLAG(_collision_test_back_facing_surfaces_bit);
+			struct structure_bsp const *bsp = global_structure_bsp_get();
+
+			mon_pt.x = g_forge.cam_x;
+			mon_pt.y = g_forge.cam_y;
+			mon_pt.z = g_forge.cam_z;
+
+			pullback_vec.i = -cmd.forward.i * 2.4f;
+			pullback_vec.j = -cmd.forward.j * 2.4f;
+			pullback_vec.k = -cmd.forward.k * 2.4f + 0.25f;
+
+			memset(&cam_coll, 0, sizeof(cam_coll));
+			if (collision_test_pill(FLAG(_collision_test_structure_bit), &mon_pt, &pullback_vec, 0.22f, NONE, &cam_coll) ||
+				collision_test_vector(cflags, &mon_pt, &pullback_vec, NONE, &cam_coll))
+			{
+				float frac = cam_coll.t - 0.12f;
+				if (frac < 0.0f)
+					frac = 0.0f;
+				cam_pt.x = mon_pt.x + pullback_vec.i * frac;
+				cam_pt.y = mon_pt.y + pullback_vec.j * frac;
+				cam_pt.z = mon_pt.z + pullback_vec.k * frac;
+			}
+			else
+			{
+				cam_pt.x = mon_pt.x + pullback_vec.i;
+				cam_pt.y = mon_pt.y + pullback_vec.j;
+				cam_pt.z = mon_pt.z + pullback_vec.k;
+			}
+
+			if (bsp)
+			{
+				if (bsp->world_bounds.x1 - bsp->world_bounds.x0 > 2.0f)
+				{
+					if (cam_pt.x < bsp->world_bounds.x0 + 0.35f) cam_pt.x = bsp->world_bounds.x0 + 0.35f;
+					if (cam_pt.x > bsp->world_bounds.x1 - 0.35f) cam_pt.x = bsp->world_bounds.x1 - 0.35f;
+				}
+				if (bsp->world_bounds.y1 - bsp->world_bounds.y0 > 2.0f)
+				{
+					if (cam_pt.y < bsp->world_bounds.y0 + 0.35f) cam_pt.y = bsp->world_bounds.y0 + 0.35f;
+					if (cam_pt.y > bsp->world_bounds.y1 - 0.35f) cam_pt.y = bsp->world_bounds.y1 - 0.35f;
+				}
+				if (bsp->world_bounds.z1 - bsp->world_bounds.z0 > 2.0f)
+				{
+					if (cam_pt.z < bsp->world_bounds.z0 + 0.35f) cam_pt.z = bsp->world_bounds.z0 + 0.35f;
+					if (cam_pt.z > bsp->world_bounds.z1 - 0.45f) cam_pt.z = bsp->world_bounds.z1 - 0.45f;
+				}
+			}
+
+			if (scenario_leaf_index_from_point(&cam_pt) == NONE)
+				cam_pt = mon_pt;
+
+			cmd.focus_position = cam_pt;
 		}
 		else
 		{
@@ -3192,114 +4029,17 @@ static void draw_teleporter_and_objective_markers(
 	short window_y1,
 	long font_index)
 {
-	struct forge_ui_area_style const *mst = &s_ui_theme.areas[_forge_ui_area_markers];
 	int i;
 
 	/* Player Spawns, Teleporter Origin/Destination, Race Markers, Oddball Markers,
 	 * and CTF Flags now render as true 3D translucent world models in
 	 * render_world_objective_and_spawn_markers() (forge_runtime_tags.c).
-	 * In 2D HUD space we only draw floating text labels while in Forge Mode
-	 * (and the 2D ground ring for KOTH Hill boundary points). */
+	 * In 2D HUD space we only draw floating text labels while in Forge Mode.
+	 * In Spartan Play mode, hide Forge-only Spawn Point and Objective markers and labels completely! */
 	if (g_forge.mode != _forge_mode_3d_monitor)
 		return;
 
-	/* Item 4: Draw connected KOTH Hill boundary polygon rings for each active hill_id (0..15) */
-	{
-		int hill_id;
-		for (hill_id = 0; hill_id < 16; hill_id++)
-		{
-			int node_indices[32];
-			float node_angles[32];
-			int ncount = 0;
-			int hill_hi = (g_forge.koth_group_placing && g_forge.koth_group_hill_id == hill_id) ? 1 : 0;
-			float cx_h = 0.0f, cy_h = 0.0f, cz_h = 0.0f;
-			int a, b;
-
-			for (i = 0; i < g_forge.live_instance_count && ncount < 32; i++)
-			{
-				struct forge_live_instance const *inst = &g_forge.live_instances[i];
-				if (!inst->active || inst->group_tag != 'flag')
-					continue;
-				if (inst->netgame_flag_type != _netgame_flag_hill && strstr(inst->tag_path, "koth") == NULL)
-					continue;
-				if (inst->team_designator != hill_id)
-					continue;
-				node_indices[ncount++] = i;
-				cx_h += inst->x;
-				cy_h += inst->y;
-				cz_h += inst->z;
-				if (i == g_forge.grabbed_live_index || i == g_forge.hovered_live_index)
-					hill_hi = 1;
-			}
-
-			if (ncount >= 2)
-			{
-				float dx_c, dy_c, dz_c;
-				cx_h /= (float)ncount;
-				cy_h /= (float)ncount;
-				cz_h /= (float)ncount;
-				dx_c = cx_h - render.camera.position.x;
-				dy_c = cy_h - render.camera.position.y;
-				dz_c = cz_h - render.camera.position.z;
-				if (dx_c * dx_c + dy_c * dy_c + dz_c * dz_c <= 80.0f * 80.0f || hill_hi)
-				{
-					uint32_t col_top = hill_hi ? 0xFFFFE868u : 0xD8FFC028u;
-					uint32_t col_bot = hill_hi ? 0xFFFFC838u : 0xB8E09818u;
-					uint32_t col_dark = 0xA0281804u;
-					short ht = hill_hi ? 2 : 1;
-
-					for (a = 0; a < ncount; a++)
-					{
-						struct forge_live_instance const *na = &g_forge.live_instances[node_indices[a]];
-						node_angles[a] = (float)atan2((double)(na->y - cy_h), (double)(na->x - cx_h));
-					}
-					for (a = 0; a < ncount - 1; a++)
-					{
-						for (b = a + 1; b < ncount; b++)
-						{
-							if (node_angles[b] < node_angles[a])
-							{
-								float ta = node_angles[a];
-								int ti = node_indices[a];
-								node_angles[a] = node_angles[b];
-								node_indices[a] = node_indices[b];
-								node_angles[b] = ta;
-								node_indices[b] = ti;
-							}
-						}
-					}
-
-					for (a = 0; a < ncount; a++)
-					{
-						int nb = (a + 1) % ncount;
-						struct forge_live_instance const *p0 = &g_forge.live_instances[node_indices[a]];
-						struct forge_live_instance const *p1 = &g_forge.live_instances[node_indices[nb]];
-						short bx0, by0, bx1, by1, tx0, ty0, tx1, ty1;
-						int ok_b0 = project_world_pt_to_window(p0->x, p0->y, p0->z + 0.03f, window_x0, window_y0, &bx0, &by0);
-						int ok_b1 = project_world_pt_to_window(p1->x, p1->y, p1->z + 0.03f, window_x0, window_y0, &bx1, &by1);
-						int ok_t0 = project_world_pt_to_window(p0->x, p0->y, p0->z + 0.24f, window_x0, window_y0, &tx0, &ty0);
-						int ok_t1 = project_world_pt_to_window(p1->x, p1->y, p1->z + 0.24f, window_x0, window_y0, &tx1, &ty1);
-
-						if (ok_b0 && ok_b1)
-						{
-							draw_screen_line_thick(bx0, by0, bx1, by1, (short)(ht + 1), col_dark, window_x0, window_y0, window_x1, window_y1);
-							draw_screen_line_thick(bx0, by0, bx1, by1, ht, col_bot, window_x0, window_y0, window_x1, window_y1);
-						}
-						if (ok_t0 && ok_t1)
-						{
-							draw_screen_line_thick(tx0, ty0, tx1, ty1, ht, col_top, window_x0, window_y0, window_x1, window_y1);
-						}
-						if (ok_b0 && ok_t0)
-						{
-							draw_screen_line_thick(bx0, by0, tx0, ty0, 1, col_bot, window_x0, window_y0, window_x1, window_y1);
-						}
-					}
-				}
-			}
-		}
-	}
-
-	/* Item 2: Only show floating marker names when the pickup reticle is over the item (or holding it) */
+	/* Only show floating marker names when the pickup reticle is over the item (or holding it) */
 	for (i = 0; i < g_forge.live_instance_count; i++)
 	{
 		struct forge_live_instance const *inst = &g_forge.live_instances[i];
@@ -3324,7 +4064,7 @@ static void draw_teleporter_and_objective_markers(
 
 			if (inst->team_designator == 1)
 			{
-				ring_col = 0xFF70B8FFu;
+				ring_col = 0xFF2896FFu;
 				team_lbl = "BLUE SPAWN";
 			}
 			else if (inst->team_designator == 0)
@@ -3334,7 +4074,7 @@ static void draw_teleporter_and_objective_markers(
 			}
 			else
 			{
-				ring_col = 0xFFFFFF68u;
+				ring_col = 0xFFFFFFFFu;
 				team_lbl = "FFA SPAWN";
 			}
 
@@ -3347,7 +4087,8 @@ static void draw_teleporter_and_objective_markers(
 				sy = (short)(window_y0 + (short)(spt.y + 0.5f));
 				if (sx >= window_x0 + 20 && sx <= window_x1 - 20 && sy >= window_y0 + 10 && sy <= window_y1 - 10)
 				{
-					draw_themed_str(_forge_ui_area_markers, font_index, (short)(sx - 28), (short)(sy + 6), team_lbl, ring_col);
+					set_forge_hud_ui_scale(FORGE_IN_MATCH_HUD_SCALE, (float)sx, (float)sy);
+					draw_ce_menu_str_box(0, font_index, (short)(sx - 80), (short)(sy + 6), (short)(sx + 80), (short)(sy + 32), 2, team_lbl, ring_col);
 				}
 			}
 			continue;
@@ -3364,6 +4105,7 @@ static void draw_teleporter_and_objective_markers(
 		if (sx < window_x0 + 10 || sx > window_x1 - 10 || sy < window_y0 + 10 || sy > window_y1 - 10)
 			continue;
 
+		set_forge_hud_ui_scale(FORGE_IN_MATCH_HUD_SCALE, (float)sx, (float)sy);
 		if (inst->group_tag == 'tele')
 		{
 			int is_sender = (inst->netgame_flag_type == _netgame_flag_teleporter_source ||
@@ -3372,43 +4114,44 @@ static void draw_teleporter_and_objective_markers(
 			char lbl[64];
 
 			snprintf(lbl, sizeof(lbl), "%s #%d", is_sender ? "TELE ORIGIN" : "TELE DEST", (int)inst->team_designator);
-			draw_themed_str(_forge_ui_area_markers, font_index, (short)(sx - 34), (short)(sy + 8), lbl, 0xFF70FFA0u);
+			draw_ce_menu_str_box(0, font_index, (short)(sx - 90), (short)(sy + 8), (short)(sx + 90), (short)(sy + 34), 2, lbl, 0xFFFFFFFFu);
 		}
 		else if (inst->group_tag == 'flag')
 		{
 			char lbl[64];
 			char const *kind = "OBJECTIVE";
-			uint32_t border_col = 0xFFFFC838u;
+			uint32_t border_col = 0xFFFFFFFFu;
 
 			if (inst->netgame_flag_type == _netgame_flag_hill || strstr(inst->tag_path, "koth"))
 			{
 				kind = "KOTH HILL";
-				border_col = 0xFFFFB828u;
+				border_col = 0xFFFFFFFFu;
 			}
 			else if (inst->netgame_flag_type == _netgame_flag_oddball_ball_spawn || strstr(inst->tag_path, "oddball"))
 			{
 				kind = "ODDBALL";
-				border_col = 0xFFBC38FFu;
+				border_col = 0xFFFFFFFFu;
 			}
 			else if (inst->netgame_flag_type == _netgame_flag_ctf_flag ||
 					 inst->netgame_flag_type == _netgame_flag_ctf_vehicle ||
 					 strstr(inst->tag_path, "ctf"))
 			{
 				kind = (inst->team_designator == 1) ? "BLUE FLAG" : "RED FLAG";
-				border_col = (inst->team_designator == 1) ? 0xFF2888FFu : 0xFFFF2828u;
+				border_col = (inst->team_designator == 1) ? 0xFF2896FFu : 0xFFFF6868u;
 			}
 			else if (inst->netgame_flag_type == _netgame_flag_race_track ||
 					 inst->netgame_flag_type == _netgame_flag_race_vehicle ||
 					 strstr(inst->tag_path, "race"))
 			{
 				kind = (inst->netgame_flag_type == _netgame_flag_race_vehicle) ? "RACE VEH" : "RACE MARKER";
-				border_col = 0xFFFF8C14u;
+				border_col = 0xFFFFFFFFu;
 			}
 
 			snprintf(lbl, sizeof(lbl), "%s #%d", kind, (int)inst->team_designator);
-			draw_themed_str(_forge_ui_area_markers, font_index, (short)(sx - 30), (short)(sy + 8), lbl, border_col);
+			draw_ce_menu_str_box(0, font_index, (short)(sx - 90), (short)(sy + 8), (short)(sx + 90), (short)(sy + 34), 2, lbl, border_col);
 		}
 	}
+	set_forge_hud_ui_scale(1.0f, 0.0f, 0.0f);
 }
 
 void forge_3d_draw_hud(
@@ -3422,15 +4165,16 @@ void forge_3d_draw_hud(
 {
 	static char const *const cat_names[NUMBER_OF_FORGE_PALETTE_CATEGORIES] = {
 		"WEAPONS",
+		"EQUIPMENT",
 		"VEHICLES",
-		"BIPEDS & UNITS",
-		"SCENERY & PROPS",
-		"BARRIERS & DEVICES",
-		"SPAWNS & TELEPORTERS",
+		"BIPEDS",
+		"SCENERY",
+		"DOORS",
+		"SPAWNS",
 		"OBJECTIVES",
-		"AI COMBAT SQUADS"
+		"AI SQUADS"
 	};
-	static char const *const snap_names[4] = { "Off", "15 deg", "45 deg", "90 deg" };
+	static char const *const snap_names[4] = { "OFF", "15 DEG", "45 DEG", "90 DEG" };
 	char buf[256];
 	short w = (short)(window_x1 - window_x0);
 	short h = (short)(window_y1 - window_y0);
@@ -3448,23 +4192,30 @@ void forge_3d_draw_hud(
 	/* Ensure customizable UI theme & PNG backgrounds from OpenCE Forge/ui/ are loaded */
 	forge_ui_theme_ensure_loaded();
 
-	/* Draw 3D-projected Player Spawns (Ground Circle + Facing Arrow) & Teleporter / Objective markers */
+	/* Draw 3D-projected Player Spawns & Teleporter / Objective floating labels */
 	draw_teleporter_and_objective_markers(window_x0, window_y0, window_x1, window_y1, font_index);
 
-	/* Point 13: Lower the bottom bar of [F1] and such to below the radar height on the UI (and clear of bottom-left radar) */
+	/* Spartan Play Mode: Bottom bar styled with base game menu row bitmap & ui\small_ui font */
 	if (g_forge.mode == _forge_mode_play && g_forge.active_modal == _forge_modal_none)
 	{
-		struct forge_ui_area_style const *bst = &s_ui_theme.areas[_forge_ui_area_bottom_bar];
-		rectangle2d bbar;
-		bbar.x0 = (short)(window_x0 + 118);
-		bbar.y0 = (short)(window_y1 - 17);
-		bbar.x1 = (short)(window_x0 + 430);
-		bbar.y1 = (short)(window_y1 - 1);
-		draw_themed_panel(_forge_ui_area_bottom_bar, &bbar, 0);
-		snprintf(buf, sizeof(buf),
-			"[F1] Forge Mode  [F5] %s",
-			g_forge.has_saved_map_once ? "Quick Update Save" : "Save Map As...");
-		draw_themed_str(_forge_ui_area_bottom_bar, font_index, (short)(bbar.x0 + 8), (short)(bbar.y0 + 1), buf, bst->text_color);
+		short bbar_w = g_forge.has_saved_map_once ? 236 : 132;
+		short bx0 = (short)(window_x0 + 118);
+		short by0 = (short)(window_y1 - 26);
+		short bx1 = (short)(bx0 + bbar_w);
+		short by1 = (short)(window_y1 - 2);
+
+		set_forge_hud_ui_scale(FORGE_IN_MATCH_HUD_SCALE, (float)bx0, (float)by1);
+
+		if (!draw_ce_menu_bitmap_cropped("pc\\bitmaps\\option_bkds_sm", 0, bx0, by0, bx1, by1, 256, 28, 0xFFFFFFFFu))
+		{
+			rectangle2d bbar = { by0, bx0, by1, bx1 };
+			draw_themed_panel(_forge_ui_area_bottom_bar, &bbar, 0);
+		}
+		if (g_forge.has_saved_map_once)
+			snprintf(buf, sizeof(buf), "[F1] FORGE    [F5] QUICK SAVE");
+		else
+			snprintf(buf, sizeof(buf), "[F1] FORGE");
+		draw_ce_menu_str_box(0, font_index, bx0, (short)(by0 + 3), bx1, by1, 2, buf, 0xFF2896FFu);
 	}
 	else if (g_forge.mode == _forge_mode_3d_monitor)
 	{
@@ -3472,12 +4223,11 @@ void forge_3d_draw_hud(
 		short cx = (short)((window_x0 + window_x1) / 2);
 		short cy = (short)((window_y0 + window_y1) / 2);
 		uint32_t ret_col = (g_forge.grabbed_live_index >= 0 || g_forge.hovered_live_index >= 0 || g_forge.hovered_object_index != NONE || g_forge.hovered_object_label[0])
-			? 0xE040FF78u : 0xD858B8FFu;
-		struct forge_ui_area_style const *tst = &s_ui_theme.areas[_forge_ui_area_top_bar];
-		struct forge_ui_area_style const *bst = &s_ui_theme.areas[_forge_ui_area_bottom_bar];
-		struct forge_ui_area_style const *mst = &s_ui_theme.areas[_forge_ui_area_markers];
+			? 0xFFFFFFFFu : 0xFF2896FFu;
 		rectangle2d rt;
-		rectangle2d pill;
+		short px0, py0, px1, py1;
+
+		set_forge_hud_ui_scale(FORGE_IN_MATCH_HUD_SCALE, (float)cx, (float)cy);
 
 		/* Center dot */
 		rt.x0 = (short)(cx - 1); rt.y0 = (short)(cy - 1); rt.x1 = (short)(cx + 2); rt.y1 = (short)(cy + 2);
@@ -3492,312 +4242,344 @@ void forge_3d_draw_hud(
 		rt.x0 = (short)(cx - 1); rt.y0 = (short)(cy + 6); rt.x1 = (short)(cx + 2); rt.y1 = (short)(cy + 12);
 		draw_quad(&rt, ret_col);
 
-		/* Show hovered object/marker label right below reticle when aiming at any map/Forge object */
+		/* Show hovered object/marker label right below reticle in base-game UI font */
 		if (g_forge.grabbed_live_index < 0 && g_forge.hovered_object_label[0])
 		{
-			snprintf(buf, sizeof(buf), "[F / Click] Grab '%s'", g_forge.hovered_object_label);
-			draw_themed_str(_forge_ui_area_markers, font_index, (short)(cx - 80), (short)(cy + 16), buf, mst->selected_color);
+			char upper_lbl[96];
+			format_clean_uppercase_item_name(g_forge.hovered_object_label, upper_lbl, sizeof(upper_lbl));
+			snprintf(buf, sizeof(buf), "[CLICK] %s", upper_lbl);
+			draw_ce_menu_str_box(0, font_index, (short)(cx - 160), (short)(cy + 16), (short)(cx + 160), (short)(cy + 42), 2, buf, 0xFFFFFFFFu);
 		}
 
-		/* Compact Halo 3-style top-right budget & Forge status pill (Point 8: AI team removed) */
-		pill.x0 = (short)(window_x1 - 246);
-		pill.y0 = (short)(window_y0 + 10);
-		pill.x1 = (short)(window_x1 - 12);
-		pill.y1 = (short)(window_y0 + 38);
-		draw_themed_panel(_forge_ui_area_top_bar, &pill, 0);
+		/* Top-Right Forge Mode Status & Budget Box (positioned right below the health/shield HUD,
+		 * scaled down an additional 50% and styled with 9-slice rounded Halo CE box & UI fonts) */
+		px0 = (short)(window_x1 - 236);
+		py0 = (short)(window_y0 + 52);
+		px1 = (short)(window_x1 - 12);
+		py1 = (short)(py0 + 54);
+		set_forge_hud_ui_scale(FORGE_COUNTER_HUD_SCALE, (float)px1, (float)py0);
+		draw_ce_pause_box(px0, py0, (short)(px1 - px0), (short)(py1 - py0), 0);
 
-		snprintf(buf, sizeof(buf), "FORGE MODE  /  ITEMS: %d / %d",
+		draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 6), "FORGE", 0xFFFFFFFFu);
+		snprintf(buf, sizeof(buf), "%d / %d",
 			g_forge.live_instance_count, FORGE_MAX_LIVE_INSTANCES);
-		draw_themed_str(_forge_ui_area_top_bar, font_index, (short)(pill.x0 + 8), (short)(pill.y0 + 3), buf, tst->title_color);
+		draw_ce_menu_str_box(1, font_index, (short)(px0 + 84), (short)(py0 + 6), (short)(px1 - 14), (short)(py0 + 30), 1 /* right */,
+			buf, 0xFFFFFFFFu);
 
-		snprintf(buf, sizeof(buf), "Snap[G]: %s  /  Invulnerable",
+		snprintf(buf, sizeof(buf), "[G] SNAP: %s",
 			snap_names[g_forge.snap_mode]);
-		draw_themed_str(_forge_ui_area_top_bar, font_index, (short)(pill.x0 + 8), (short)(pill.y0 + 15), buf, tst->text_color);
+		draw_ce_menu_str_box(0, font_index, (short)(px0 + 14), (short)(py0 + 28), (short)(px1 - 14), (short)(py1 - 6), 0,
+			buf, 0xFF2896FFu);
 
-		/* Point 9 & Point 13: Bottom control strip positioned below the radar height on the UI */
+		/* Bottom Control Strip styled with base game option_bkds & ui\small_ui font */
 		if (g_forge.active_modal == _forge_modal_none)
 		{
-			rectangle2d bbar;
-			bbar.x0 = (short)(window_x0 + 118);
-			bbar.y0 = (short)(window_y1 - 17);
-			bbar.x1 = (short)(window_x1 - 12);
-			bbar.y1 = (short)(window_y1 - 1);
-			draw_themed_panel(_forge_ui_area_bottom_bar, &bbar, 0);
+			short bx0 = (short)(window_x0 + 118);
+			short by0 = (short)(window_y1 - 26);
+			short bx1 = (short)(window_x1 - 12);
+			short by1 = (short)(window_y1 - 2);
+
+			set_forge_hud_ui_scale(FORGE_IN_MATCH_HUD_SCALE, (float)(bx0 + bx1) * 0.5f, (float)by1);
+
+			if (!draw_ce_menu_bitmap_cropped("pc\\bitmaps\\option_bkds", 0, bx0, by0, bx1, by1, 512, 28, 0xFFFFFFFFu))
+			{
+				rectangle2d bbar = { by0, bx0, by1, bx1 };
+				draw_themed_panel(_forge_ui_area_bottom_bar, &bbar, 0);
+			}
 
 			if (g_forge.grabbed_live_index >= 0)
 			{
 				snprintf(buf, sizeof(buf),
-					"[Click/Enter] Place  [Scroll] Dist(%.0fm)  [Hold Z+Click] Floor  [R] Rot  [X] Opts  [Del]",
+					"[CLICK] PLACE   [SCROLL] %.0fM   [Z] FLOOR   [F] SURFACE   [R] ROTATE   [X] OPTIONS   [DEL] DELETE",
 					g_forge.grab_distance);
 			}
 			else
 			{
-				snprintf(buf, sizeof(buf),
-					"[F2] Menu  [Click/F] Grab(<=20m)  [F4] 3rd-P  [F5] %s  [F1] Play",
-					g_forge.has_saved_map_once ? "Quick Save" : "Save Map As...");
+				if (g_forge.has_saved_map_once)
+				{
+					snprintf(buf, sizeof(buf),
+						"[F2] OBJECTS   [CLICK] GRAB   [F4] VIEW   [F5] QUICK SAVE   [F1] PLAY");
+				}
+				else
+				{
+					snprintf(buf, sizeof(buf),
+						"[F2] OBJECTS   [CLICK] GRAB   [F4] VIEW   [ESC] SAVE MAP..   [F1] PLAY");
+				}
 			}
-			draw_themed_str(_forge_ui_area_bottom_bar, font_index, (short)(bbar.x0 + 8), (short)(bbar.y0 + 1), buf, bst->text_color);
+			draw_ce_menu_str_box(0, font_index, bx0, (short)(by0 + 2), bx1, by1, 2, buf, 0xFF2896FFu);
 		}
 	}
 
 	/* ========================================================================
-	 * HALO 3-STYLE COMPACT LEFT-ALIGNED FORGE MENU (F2)
+	 * UNIFIED TABBED FORGE OBJECT PALETTE MENU (F2) - BASE GAME MENU STYLING
+	 * Uses authentic Halo CE 9-slice objectives container, option_bkds_sm spinner
+	 * with arrow_sm_left/right, rounded row highlight pill, text_button_background,
+	 * and ui\large_ui + ui\small_ui fonts (#FF2896FF & #FFFFFFFF).
 	 * ======================================================================== */
 	if (g_forge.active_modal == _forge_modal_spawn_palette)
 	{
-		struct forge_ui_area_style const *st = &s_ui_theme.areas[_forge_ui_area_spawn_menu];
+		int filtered[512];
+		int fcount = get_filtered_catalog_indices(filtered, 512);
+		int r, max_rows = 10;
+		short box_w = 296;
+		short box_h = 336;
 		short px0 = (short)(window_x0 + 16);
-		short py0 = (short)(window_y0 + 44);
-		short px1 = (short)(window_x0 + 276);
-		short py1 = (short)(window_y0 + 260);
-		rectangle2d panel, ftr;
+		short py0 = (short)(window_y0 + 34);
+		short px1 = (short)(px0 + box_w);
+		short py1 = (short)(py0 + box_h);
+		short spin_x0 = (short)(px0 + 14);
+		short spin_y0 = (short)(py0 + 32);
+		short spin_x1 = (short)(px1 - 14);
+		short spin_y1 = (short)(spin_y0 + 26);
 		short y_cur;
+		char clean_name[64];
 
-		if (g_forge.h3_menu_stage == 0)
+		set_forge_hud_ui_scale(FORGE_IN_MATCH_HUD_SCALE, (float)px0, (float)py0);
+
+		/* Authentic Halo CE 9-slice Objectives/Pause Box container */
+		draw_ce_pause_box(px0, py0, box_w, box_h, 1);
+
+		/* Top Header Bar Text in ui\large_ui */
+		draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 4),
+			"FORGE PALETTE", 0xFFFFFFFFu);
+		snprintf(buf, sizeof(buf), "%d / %d", g_forge.live_instance_count, FORGE_MAX_LIVE_INSTANCES);
+		draw_ce_menu_str_box(0, font_index, (short)(px1 - 110), (short)(py0 + 6), (short)(px1 - 14), (short)(py0 + 28), 1 /* right */,
+			buf, 0xFF2896FFu);
+
+		/* Category Spinner Row (3-slice rounded option_bkds_sm + arrow_sm_left + arrow_sm_right + ui\large_ui) */
+		draw_ce_rounded_row_bar(1, spin_x0, spin_y0, spin_x1, spin_y1);
+		draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_left", 0, (short)(spin_x0 + 6), (short)(spin_y0 + 7), (short)(spin_x0 + 12), (short)(spin_y0 + 19), 6, 12, 0xFFFFFFFFu);
+		draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_right", 0, (short)(spin_x1 - 12), (short)(spin_y0 + 7), (short)(spin_x1 - 6), (short)(spin_y0 + 19), 6, 12, 0xFFFFFFFFu);
+
+		snprintf(buf, sizeof(buf), "%s (%d/%d)",
+			cat_names[g_forge.current_category],
+			fcount > 0 ? (g_forge.palette_cursor + 1) : 0,
+			fcount);
+		draw_ce_menu_str_box(1, font_index, (short)(spin_x0 + 16), (short)(spin_y0 + 2), (short)(spin_x1 - 16), spin_y1, 2 /* center */,
+			buf, 0xFFFFFFFFu);
+
+		/* Horizontal Blue Divider Line (bitmaps/blue) */
+		draw_ce_blue_line((short)(px0 + 14), (short)(spin_y1 + 3), (short)(px1 - 14), 2);
+
+		/* 10 Item Rows with rounded highlight on BOTH left and right ends when selected */
+		y_cur = (short)(spin_y1 + 8);
+		for (r = 0; r < max_rows && (g_forge.palette_scroll + r) < fcount; r++)
 		{
-			int c;
-			/* 6 active categories (Bipeds & AI Squads hidden) */
-			py1 = (short)(py0 + 36 + 6 * 18 + 22);
-			panel.x0 = px0; panel.y0 = py0; panel.x1 = px1; panel.y1 = py1;
-			draw_themed_panel(_forge_ui_area_spawn_menu, &panel, 24);
-			draw_themed_str(_forge_ui_area_spawn_menu, font_index, (short)(px0 + 10), (short)(py0 + 5),
-				"FORGE OBJECT PALETTE", st->title_color);
+			int idx = g_forge.palette_scroll + r;
+			struct forge_catalog_entry const *ce = &g_forge.catalog[filtered[idx]];
+			int sel = (idx == g_forge.palette_cursor);
+			int placed_cnt = count_active_instances_for_catalog_entry(ce);
+			uint32_t row_col = sel ? 0xFFFFFFFFu : 0xFF2896FFu;
+			short rx0 = (short)(px0 + 14);
+			short ry0 = y_cur;
+			short rx1 = (short)(px1 - 14);
+			short ry1 = (short)(ry0 + 22);
 
-			y_cur = (short)(py0 + 30);
-			for (c = 0; c < NUMBER_OF_FORGE_PALETTE_CATEGORIES; c++)
-			{
-				int sel, cnt;
-				if (c == _forge_cat_bipeds || c == _forge_cat_ai_squads)
-					continue;
-				sel = ((int)g_forge.current_category == c);
-				cnt = get_filtered_catalog_indices_for_cat((enum forge_palette_category)c, NULL, 512);
-				if (sel)
-				{
-					rectangle2d hi;
-					hi.x0 = (short)(px0 + 4);
-					hi.y0 = (short)(y_cur - 1);
-					hi.x1 = (short)(px1 - 4);
-					hi.y1 = (short)(y_cur + 15);
-					draw_quad(&hi, st->highlight_color);
-					draw_box_border(hi.x0, hi.y0, hi.x1, hi.y1, 1, st->border_color);
-				}
-				snprintf(buf, sizeof(buf), "%-22s (%d)", cat_names[c], cnt);
-				draw_themed_str(_forge_ui_area_spawn_menu, font_index, (short)(px0 + 12), y_cur,
-					buf, sel ? st->selected_color : st->text_color);
-				y_cur = (short)(y_cur + 18);
-			}
+			if (sel)
+				draw_ce_rounded_row_bar(1, rx0, ry0, rx1, ry1);
 
-			ftr.x0 = px0; ftr.y0 = (short)(py1 - 20); ftr.x1 = px1; ftr.y1 = py1;
-			draw_quad(&ftr, 0x9008101Eu);
-			draw_themed_str(_forge_ui_area_spawn_menu, font_index, (short)(px0 + 10), (short)(py1 - 16),
-				"[Enter] Select  [Up/Down] Move  [F2] Close", st->title_color);
+			format_clean_uppercase_item_name(ce->display_name, clean_name, sizeof(clean_name));
+			draw_ce_menu_str_box(0, font_index, (short)(rx0 + 10), (short)(ry0 + 1), (short)(rx1 - 38), ry1, 0,
+				clean_name, row_col);
+
+			snprintf(buf, sizeof(buf), "%d", placed_cnt);
+			draw_ce_menu_str_box(0, font_index, (short)(rx1 - 40), (short)(ry0 + 1), (short)(rx1 - 10), ry1, 1 /* right */,
+				buf, row_col);
+
+			y_cur = (short)(y_cur + 23);
 		}
-		else
+
+		/* Scroll indicator arrows using authentic arrow_sm_up / arrow_sm_down bitmaps */
+		if (g_forge.palette_scroll > 0)
 		{
-			/* Stage 1: Halo 3 Item List inside Selected Category (9 visible rows + Live 3D Preview) */
-			int filtered[512];
-			int fcount = get_filtered_catalog_indices(filtered, 512);
-			int r, max_rows = 9;
-
-			py1 = (short)(py0 + 34 + max_rows * 17 + 26);
-			panel.x0 = px0; panel.y0 = py0; panel.x1 = px1; panel.y1 = py1;
-			draw_themed_panel(_forge_ui_area_spawn_menu, &panel, 24);
-
-			snprintf(buf, sizeof(buf), "< %s (%d/%d)",
-				cat_names[g_forge.current_category],
-				fcount > 0 ? (g_forge.palette_cursor + 1) : 0,
-				fcount);
-			draw_themed_str(_forge_ui_area_spawn_menu, font_index, (short)(px0 + 10), (short)(py0 + 5),
-				buf, st->title_color);
-
-			y_cur = (short)(py0 + 30);
-			for (r = 0; r < max_rows && (g_forge.palette_scroll + r) < fcount; r++)
-			{
-				int idx = g_forge.palette_scroll + r;
-				struct forge_catalog_entry const *ce = &g_forge.catalog[filtered[idx]];
-				int sel = (idx == g_forge.palette_cursor);
-				if (sel)
-				{
-					rectangle2d hi;
-					hi.x0 = (short)(px0 + 4);
-					hi.y0 = (short)(y_cur - 1);
-					hi.x1 = (short)(px1 - 4);
-					hi.y1 = (short)(y_cur + 15);
-					draw_quad(&hi, st->highlight_color);
-					draw_box_border(hi.x0, hi.y0, hi.x1, hi.y1, 1, st->border_color);
-				}
-				snprintf(buf, sizeof(buf), "%s", ce->display_name);
-				draw_themed_str(_forge_ui_area_spawn_menu, font_index, (short)(px0 + 12), y_cur,
-					buf, sel ? st->selected_color : st->text_color);
-				y_cur = (short)(y_cur + 17);
-			}
-
-			ftr.x0 = px0; ftr.y0 = (short)(py1 - 20); ftr.x1 = px1; ftr.y1 = py1;
-			draw_quad(&ftr, 0x9008101Eu);
-			draw_themed_str(_forge_ui_area_spawn_menu, font_index, (short)(px0 + 10), (short)(py1 - 16),
-				"[Enter] Confirm & Place  [Backspace] Back", st->title_color);
-
-			/* Live 3D Item Preview card below the list */
-			if (fcount > 0 && g_forge.palette_cursor < fcount)
-			{
-				struct forge_ui_area_style const *pst = &s_ui_theme.areas[_forge_ui_area_preview_panel];
-				struct forge_catalog_entry const *sel_ce = &g_forge.catalog[filtered[g_forge.palette_cursor]];
-				rectangle2d pcard;
-				pcard.x0 = px0;
-				pcard.y0 = (short)(py1 + 6);
-				pcard.x1 = px1;
-				pcard.y1 = (short)(py1 + 54);
-				draw_themed_panel(_forge_ui_area_preview_panel, &pcard, 0);
-				snprintf(buf, sizeof(buf), "3D PREVIEW: %s", sel_ce->display_name);
-				draw_themed_str(_forge_ui_area_preview_panel, font_index, (short)(pcard.x0 + 8), (short)(pcard.y0 + 4),
-					buf, pst->title_color);
-				snprintf(buf, sizeof(buf), "Tag: %s", sel_ce->tag_path);
-				draw_themed_str(_forge_ui_area_preview_panel, font_index, (short)(pcard.x0 + 8), (short)(pcard.y0 + 18),
-					buf, pst->text_color);
-				draw_themed_str(_forge_ui_area_preview_panel, font_index, (short)(pcard.x0 + 8), (short)(pcard.y0 + 32),
-					"Press [Enter] to confirm item & position it", pst->selected_color);
-			}
+			draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_up", 1,
+				(short)(px1 - 24), (short)(spin_y1 + 9), (short)(px1 - 12), (short)(spin_y1 + 21), 16, 16, 0xFFFFFFFFu);
 		}
+		if (g_forge.palette_scroll + max_rows < fcount)
+		{
+			draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_down", 1,
+				(short)(px1 - 24), (short)(py1 - 50), (short)(px1 - 12), (short)(py1 - 38), 16, 16, 0xFFFFFFFFu);
+		}
+
+		/* Footer Action Buttons using authentic bitmaps/text_button_background (128x24) */
+		draw_ce_text_button(font_index, (short)(px0 + 14), (short)(py1 - 32), 128, 24, 1, "[ENTER] PLACE");
+		draw_ce_text_button(font_index, (short)(px1 - 142), (short)(py1 - 32), 128, 24, 0, "[ESC] DONE");
 	}
 
 	/* ========================================================================
-	 * HALO 3-STYLE OBJECT PROPERTIES PANEL (X when holding an object)
+	 * OBJECT PROPERTIES PANEL (X when holding an object) - BASE GAME MENU STYLING
 	 * ======================================================================== */
 	if (g_forge.active_modal == _forge_modal_object_properties && g_forge.grabbed_live_index >= 0)
 	{
-		struct forge_ui_area_style const *pst = &s_ui_theme.areas[_forge_ui_area_properties_menu];
 		struct forge_live_instance const *inst = &g_forge.live_instances[g_forge.grabbed_live_index];
+		short box_w = 312;
+		short box_h = 224;
 		short px0 = (short)(window_x0 + 16);
-		short py0 = (short)(window_y0 + 44);
-		short px1 = (short)(window_x0 + 310);
-		short py1 = (short)(py0 + 148);
-		rectangle2d panel;
-		char rows[5][80];
+		short py0 = (short)(window_y0 + 34);
+		short px1 = (short)(px0 + box_w);
+		short py1 = (short)(py0 + box_h);
+		char labels[5][32];
+		char values[5][48];
 		int r;
 
-		panel.x0 = px0; panel.y0 = py0; panel.x1 = px1; panel.y1 = py1;
-		draw_themed_panel(_forge_ui_area_properties_menu, &panel, 24);
-		draw_themed_str(_forge_ui_area_properties_menu, font_index, (short)(px0 + 10), (short)(py0 + 5),
-			"OBJECT, SPAWN & OBJECTIVE OPTIONS", pst->title_color);
+		set_forge_hud_ui_scale(FORGE_IN_MATCH_HUD_SCALE, (float)px0, (float)py0);
+
+		draw_ce_pause_box(px0, py0, box_w, box_h, 1);
+
+		draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 4),
+			"OBJECT PROPERTIES", 0xFFFFFFFFu);
 
 		if (inst->group_tag == 'spwn')
 		{
-			char const *t_lbl = (inst->team_designator == 1) ? "BLUE TEAM (Blue)" :
-				(inst->team_designator == 2 ? "FFA (Yellow)" : "RED TEAM (Red)");
-			snprintf(rows[0], sizeof(rows[0]), "Spawn Team: < %s >", t_lbl);
+			snprintf(labels[0], sizeof(labels[0]), "TEAM:");
+			snprintf(values[0], sizeof(values[0]), "%s",
+				(inst->team_designator == 1) ? "BLUE TEAM" : (inst->team_designator == 2 ? "FFA" : "RED TEAM"));
 		}
 		else if (inst->group_tag == 'flag' &&
 			(inst->netgame_flag_type == _netgame_flag_ctf_flag || inst->netgame_flag_type == _netgame_flag_ctf_vehicle))
 		{
-			snprintf(rows[0], sizeof(rows[0]), "CTF Team: < %s >",
-				inst->team_designator == 1 ? "BLUE TEAM (1)" : "RED TEAM (0)");
+			snprintf(labels[0], sizeof(labels[0]), "TEAM:");
+			snprintf(values[0], sizeof(values[0]), "%s",
+				inst->team_designator == 1 ? "BLUE TEAM" : "RED TEAM");
 		}
 		else if (inst->group_tag == 'flag' &&
 			(inst->netgame_flag_type == _netgame_flag_race_track || inst->netgame_flag_type == _netgame_flag_race_vehicle))
 		{
-			snprintf(rows[0], sizeof(rows[0]), "Race Order / Node ID: < #%d >", (int)inst->team_designator);
+			snprintf(labels[0], sizeof(labels[0]), "ORDER:");
+			snprintf(values[0], sizeof(values[0]), "#%d", (int)inst->team_designator);
 		}
 		else
 		{
-			snprintf(rows[0], sizeof(rows[0]), "Ref / Hill / Link ID: < #%d >", (int)inst->team_designator);
+			snprintf(labels[0], sizeof(labels[0]), "CHANNEL:");
+			snprintf(values[0], sizeof(values[0]), "#%d", (int)inst->team_designator);
 		}
-		snprintf(rows[1], sizeof(rows[1]), "Spawn Mode: < %s >", gametype_flags_label(inst->gametype_flags));
-		snprintf(rows[2], sizeof(rows[2]), "Rotation Snap: < %s >", snap_names[g_forge.snap_mode]);
-		snprintf(rows[3], sizeof(rows[3]), "Snap To Ground    [Hold Z + Click]");
-		snprintf(rows[4], sizeof(rows[4]), "Delete Object     [Enter / Del]");
+		snprintf(labels[1], sizeof(labels[1]), "GAME MODE:");
+		snprintf(values[1], sizeof(values[1]), "%s", gametype_flags_label(inst->gametype_flags));
+		snprintf(labels[2], sizeof(labels[2]), "ROT SNAP:");
+		snprintf(values[2], sizeof(values[2]), "%s", snap_names[g_forge.snap_mode]);
+		snprintf(labels[3], sizeof(labels[3]), "[Z] DROP TO FLOOR");
+		values[3][0] = 0;
+		snprintf(labels[4], sizeof(labels[4]), "[DEL] DELETE OBJECT");
+		values[4][0] = 0;
 
 		for (r = 0; r < 5; r++)
 		{
-			short ry = (short)(py0 + 30 + r * 21);
+			short rx0 = (short)(px0 + 14);
+			short ry0 = (short)(py0 + 34 + r * 28);
+			short rx1 = (short)(px1 - 14);
+			short ry1 = (short)(ry0 + 25);
 			int sel = (g_forge.props_cursor == r);
-			if (sel)
+			uint32_t col = sel ? 0xFFFFFFFFu : 0xFF2896FFu;
+
+			draw_ce_rounded_row_bar((short)(sel ? 1 : 0), rx0, ry0, rx1, ry1);
+
+			draw_ce_menu_str(1, font_index, (short)(rx0 + 10), (short)(ry0 + 2), labels[r], col);
+			if (values[r][0])
 			{
-				rectangle2d hi;
-				hi.x0 = (short)(px0 + 4);
-				hi.y0 = (short)(ry - 1);
-				hi.x1 = (short)(px1 - 4);
-				hi.y1 = (short)(ry + 15);
-				draw_quad(&hi, pst->highlight_color);
+				short vx0 = (short)(rx0 + 118);
+				short vx1 = (short)(rx1 - 8);
+				draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_left", 0, vx0, (short)(ry0 + 6), (short)(vx0 + 6), (short)(ry0 + 18), 6, 12, 0xFFFFFFFFu);
+				draw_ce_menu_bitmap_cropped("pc\\bitmaps\\arrow_sm_right", 0, (short)(vx1 - 6), (short)(ry0 + 6), vx1, (short)(ry0 + 18), 6, 12, 0xFFFFFFFFu);
+				draw_ce_menu_str_box(0, font_index, (short)(vx0 + 10), (short)(ry0 + 3), (short)(vx1 - 10), ry1, 2 /* center */, values[r], col);
 			}
-			draw_themed_str(_forge_ui_area_properties_menu, font_index, (short)(px0 + 12), ry,
-				rows[r], sel ? pst->selected_color : pst->text_color);
 		}
+
+		draw_ce_text_button(font_index, (short)(px0 + 14), (short)(py1 - 32), 136, 24, 1, "[ENTER] SELECT");
+		draw_ce_text_button(font_index, (short)(px1 - 150), (short)(py1 - 32), 136, 24, 0, "[ESC] DONE");
 	}
 
-	/* Point 10: Modal: "Add Tags to Cache" (MAPS) -> customforgeasset.map + credits.md */
-	if (g_forge.active_modal == _forge_modal_inject_custom_tags)
-	{
-		struct forge_ui_area_style const *mst = &s_ui_theme.areas[_forge_ui_area_maps_modal];
-		rectangle2d panel;
-		int r;
-		short py;
-
-		panel.x0 = (short)(window_x0 + 24);
-		panel.y0 = (short)(window_y0 + 48);
-		panel.x1 = (short)(window_x0 + 380);
-		panel.y1 = (short)(window_y0 + 310);
-		draw_themed_panel(_forge_ui_area_maps_modal, &panel, 24);
-		draw_themed_str(_forge_ui_area_maps_modal, font_index, (short)(panel.x0 + 10), (short)(panel.y0 + 5),
-			"MAPS: ADD TAGS TO CACHE", mst->title_color);
-
-		py = (short)(panel.y0 + 30);
-		for (r = 0; r < g_forge.donor_map_count && r < 13; r++)
-		{
-			int sel = (r == g_forge.donor_map_cursor);
-			if (sel)
-			{
-				rectangle2d hi;
-				hi.x0 = (short)(panel.x0 + 4);
-				hi.y0 = (short)(py - 1);
-				hi.x1 = (short)(panel.x1 - 4);
-				hi.y1 = (short)(py + 15);
-				draw_quad(&hi, mst->highlight_color);
-			}
-			snprintf(buf, sizeof(buf), "%s", g_forge.donor_map_files[r]);
-			draw_themed_str(_forge_ui_area_maps_modal, font_index, (short)(panel.x0 + 12), py,
-				buf, sel ? mst->selected_color : mst->text_color);
-			py = (short)(py + 17);
-		}
-	}
-
-	/* Point 11: Modal: Initial Save Prompt ("Name Custom Forge Map" -> forge_maps/<name>/<name>.map) */
+	/* ========================================================================
+	 * INITIAL SAVE MAP DIALOG BOX (Opened from Esc -> SAVE MAP..)
+	 * Styled with the base game's pause/objectives box, rounded option_bkds bar,
+	 * text_button_background buttons, and ui\large_ui / ui\small_ui fonts!
+	 * ======================================================================== */
 	if (g_forge.active_modal == _forge_modal_save_copy_as)
 	{
-		struct forge_ui_area_style const *sst = &s_ui_theme.areas[_forge_ui_area_save_modal];
-		rectangle2d panel;
-		panel.x0 = (short)(window_x0 + 110);
-		panel.y0 = (short)(window_y0 + 145);
-		panel.x1 = (short)(window_x1 - 110);
-		panel.y1 = (short)(window_y0 + 250);
-		draw_themed_panel(_forge_ui_area_save_modal, &panel, 24);
-		draw_themed_str(_forge_ui_area_save_modal, font_index, (short)(panel.x0 + 12), (short)(panel.y0 + 5),
-			"INITIAL SAVE: NAME YOUR CUSTOM FORGE MAP", sst->title_color);
+		short cx = (short)((window_x0 + window_x1) / 2);
+		short cy = (short)((window_y0 + window_y1) / 2);
+		short box_w = 416;
+		short box_h = 225;
+		short px0 = (short)(cx - box_w / 2);
+		short py0 = (short)(cy - box_h / 2 - 8);
+		short px1 = (short)(px0 + box_w);
+		short py1 = (short)(py0 + box_h);
+		short in_x0 = (short)(px0 + 28);
+		short in_y0 = (short)(py0 + 74);
+		short in_x1 = (short)(px1 - 28);
+		short in_y1 = (short)(in_y0 + 28);
+		size_t name_len = strlen(g_forge.save_map_name);
+		char const *visible_input = g_forge.save_map_name;
+		char short_name[32];
 
-		snprintf(buf, sizeof(buf), "Custom Map Name: %s_  (forge_maps/%s/%s.map)",
-			g_forge.save_map_name, g_forge.save_map_name, g_forge.save_map_name);
-		draw_themed_str(_forge_ui_area_save_modal, font_index, (short)(panel.x0 + 12), (short)(panel.y0 + 34),
-			buf, sst->selected_color);
+		set_forge_hud_ui_scale(FORGE_IN_MATCH_HUD_SCALE, (float)cx, (float)cy);
 
-		draw_themed_str(_forge_ui_area_save_modal, font_index, (short)(panel.x0 + 12), (short)(panel.y0 + 54),
-			"Packaged into forge_maps/<name>/ (keeps custom_maps/ clean).", sst->text_color);
+		/* If the typed name is very long, scroll the input view to show the last 22 characters */
+		if (name_len > 22)
+			visible_input = g_forge.save_map_name + (name_len - 22);
 
-		draw_themed_str(_forge_ui_area_save_modal, font_index, (short)(panel.x0 + 12), (short)(panel.y0 + 74),
-			"[Enter] Save Map    [Backspace] Edit Name    [Esc] Cancel", sst->title_color);
+		/* Truncate map name for the output file preview so it never overflows the dialog box */
+		if (name_len > 18)
+			snprintf(short_name, sizeof(short_name), "%.15s...", g_forge.save_map_name);
+		else
+			snprintf(short_name, sizeof(short_name), "%s", g_forge.save_map_name);
+
+		/* Draw the authentic 9-slice Halo CE Pause / Objectives Box */
+		draw_ce_pause_box(px0, py0, box_w, box_h, 1);
+
+		/* Header Title in ui\large_ui */
+		draw_ce_menu_str(1, font_index, (short)(px0 + 18), (short)(py0 + 4),
+			"SAVE MAP..", 0xFFFFFFFFu);
+
+		/* Field Label in ui\large_ui (#FF2896FF) */
+		draw_ce_menu_str(1, font_index, in_x0, (short)(py0 + 44),
+			"ENTER FORGE MAP NAME:", 0xFF2896FFu);
+
+		/* Base game 3-slice rounded option_bkds text entry field */
+		if (!draw_ce_rounded_row_bar(1, in_x0, in_y0, in_x1, in_y1))
+		{
+			rectangle2d ib = { in_y0, in_x0, in_y1, in_x1 };
+			draw_quad(&ib, 0xE8040C1Cu);
+			draw_box_border(in_x0, in_y0, in_x1, in_y1, 1, 0xFF2896FFu);
+		}
+
+		snprintf(buf, sizeof(buf), "%s_", visible_input);
+		draw_ce_menu_str_box(1, font_index, (short)(in_x0 + 14), (short)(in_y0 + 3), (short)(in_x1 - 14), in_y1, 0,
+			buf, 0xFFFFFFFFu);
+
+		draw_ce_blue_line(in_x0, (short)(py0 + 114), in_x1, 2);
+
+		snprintf(buf, sizeof(buf), "Saves as: custom_maps\\%s.map", short_name);
+		draw_ce_menu_str_box(0, font_index, in_x0, (short)(py0 + 124), in_x1, (short)(py0 + 144), 0,
+			buf, 0xFF2896FFu);
+
+		draw_ce_menu_str_box(0, font_index, in_x0, (short)(py0 + 146), in_x1, (short)(py0 + 168), 0,
+			"After initial save, press [F5] in-game for Quick Save.", 0xFF2896FFu);
+
+		/* Base game text_button_background buttons at bottom of dialog */
+		draw_ce_text_button(font_index, (short)(cx - 138), (short)(py1 - 34), 128, 24, 1, "[ENTER] SAVE");
+		draw_ce_text_button(font_index, (short)(cx + 10), (short)(py1 - 34), 128, 24, 0, "[ESC] CANCEL");
 	}
 
-	/* Compact Status Toast Banner */
+	/* Status Toast Banner styled with base game option_bkds (frame 1) & ui\small_ui font */
 	if (g_forge.status_message[0] && (uint32_t)system_milliseconds() < g_forge.status_message_until_ms)
 	{
-		struct forge_ui_area_style const *tst = &s_ui_theme.areas[_forge_ui_area_toast_bar];
-		rectangle2d sbar;
-		sbar.x0 = (short)(window_x0 + 118);
-		sbar.y0 = (short)(window_y1 - 35);
-		sbar.x1 = (short)(window_x1 - 12);
-		sbar.y1 = (short)(window_y1 - 19);
-		draw_themed_panel(_forge_ui_area_toast_bar, &sbar, 0);
-		draw_themed_str(_forge_ui_area_toast_bar, font_index, (short)(sbar.x0 + 8), (short)(sbar.y0 + 1),
-			g_forge.status_message, tst->text_color);
+		short sx0 = (short)(window_x0 + 118);
+		short sy0 = (short)(window_y1 - 54);
+		short sx1 = (short)(window_x1 - 12);
+		short sy1 = (short)(window_y1 - 30);
+
+		set_forge_hud_ui_scale(FORGE_IN_MATCH_HUD_SCALE, (float)(sx0 + sx1) * 0.5f, (float)sy1);
+
+		if (!draw_ce_menu_bitmap_cropped("pc\\bitmaps\\option_bkds", 1, sx0, sy0, sx1, sy1, 512, 28, 0xFFFFFFFFu))
+		{
+			rectangle2d sbar = { sy0, sx0, sy1, sx1 };
+			draw_themed_panel(_forge_ui_area_toast_bar, &sbar, 0);
+		}
+		draw_ce_menu_str_box(0, font_index, (short)(sx0 + 12), (short)(sy0 + 3), (short)(sx1 - 12), sy1, 2 /* center */,
+			g_forge.status_message, 0xFFFFFFFFu);
 	}
+
+	set_forge_hud_ui_scale(1.0f, 0.0f, 0.0f);
 }
 
 

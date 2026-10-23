@@ -1,177 +1,162 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   ============================================================================
-  OpenCE Forge - Customizable In-Game UI Theme & Background Configuration
+  OpenCE Forge - Base Game Halo CE Menu UI Theme & Font Configuration
   File: OpenCE Forge/ui/forge_ui.xml
   Press [F8] in-game at any time to live-reload this file and all PNG images!
   ============================================================================
 
   FONT ATTRIBUTES (available on every UI section below):
-    font="terminal"      Font family: "terminal", "system", "small", "large", "ticker",
-                         or any loaded font tag path (e.g. "ui\small_ui", "ui\large_ui").
+    font="large"         Font family: "large" (ui\large_ui), "small" (ui\small_ui),
+                         "terminal" (ui\interstate), "ticker", or any loaded font tag path.
     style="plain"        Font style: "plain", "bold", "italic", "condense", "underline".
     size="1.0"           Font size multiplier (e.g. "0.85", "1.0", "1.2", "1.5").
     title_color="#..."   Header / title text color (#RRGGBB or #AARRGGBB hex).
     text_color="#..."    Normal item / body text color (#RRGGBB or #AARRGGBB hex).
     selected_color="#..." Highlighted / selected item text color (#RRGGBB or #AARRGGBB hex).
-
-  BACKGROUND & PANEL ATTRIBUTES:
-    background="panel_spawn_menu.png"
-                         PNG image file inside `OpenCE Forge/ui/` drawn behind the menu.
-                         Edit these PNGs in Photoshop/GIMP/Paint.NET and press [F8] in-game!
-    use_image="true"     Set "true" to draw the PNG image, or "false" to use solid bg_color.
-    image_tint="#FFFFFFFF"
-                         Optional ARGB tint multiplied with the PNG background (#FFFFFFFF = pure PNG).
-    bg_color="#E00A1526" Solid fallback background color when use_image="false".
-    header_color="#00000000"
-                         Optional header overlay color (#00000000 = transparent so PNG header shows).
-    highlight_color="#D8225C9C"
-                         Selected row highlight bar color.
-    border_color="#00000000"
-                         Optional extra border color (#00000000 = use the border in the PNG image).
 -->
 <forge_ui>
-    <!-- [F2] Forge Object Spawn Palette Menu (Left-Aligned Category & Item List) -->
+    <!-- [F2] Forge Object Spawn Palette Menu (Base Halo CE Pause/Objectives Menu Style) -->
     <spawn_menu
-        font="terminal"
+        font="large"
         style="plain"
         size="1.0"
-        title_color="#FFA6EBFF"
-        text_color="#FFC7DBF5"
-        selected_color="#FFFFF5A6"
-        background="panel_spawn_menu.png"
+        title_color="#FFFFFFFF"
+        text_color="#FF2896FF"
+        selected_color="#FFFFFFFF"
+        background="escape_menu_background.png"
         use_image="true"
         image_tint="#FFFFFFFF"
-        bg_color="#E00A1526"
-        header_color="#6014325A"
-        highlight_color="#D8225C9C"
-        border_color="#804498F2"
+        bg_color="#E805132C"
+        header_color="#90194480"
+        highlight_color="#E81E5AA0"
+        border_color="#FF2896FF"
     />
 
     <!-- Live 3D Item Preview Card (Below the [F2] Item List) -->
     <preview_panel
-        font="terminal"
+        font="small"
         style="plain"
         size="1.0"
-        title_color="#FF80FFB8"
-        text_color="#FFC7E0FA"
-        selected_color="#FFFFEB8C"
-        background="panel_preview.png"
+        title_color="#FFFFFFFF"
+        text_color="#FF2896FF"
+        selected_color="#FFFFFFFF"
+        background="escape_menu_background.png"
         use_image="true"
         image_tint="#FFFFFFFF"
-        bg_color="#D80A1526"
-        header_color="#00000000"
-        highlight_color="#D8225C9C"
-        border_color="#8044FF98"
+        bg_color="#E805132C"
+        header_color="#90194480"
+        highlight_color="#E81E5AA0"
+        border_color="#FF2896FF"
     />
 
     <!-- [X] Object & Teleporter Properties Panel -->
     <properties_menu
-        font="terminal"
+        font="large"
         style="plain"
         size="1.0"
-        title_color="#FFA6EBFF"
-        text_color="#FFD1E0F5"
-        selected_color="#FFFFF5A6"
-        background="panel_modal.png"
+        title_color="#FFFFFFFF"
+        text_color="#FF2896FF"
+        selected_color="#FFFFFFFF"
+        background="escape_menu_background.png"
         use_image="true"
         image_tint="#FFFFFFFF"
-        bg_color="#E00A1526"
-        header_color="#6014325A"
-        highlight_color="#D8225C9C"
-        border_color="#804498F2"
+        bg_color="#E805132C"
+        header_color="#90194480"
+        highlight_color="#E81E5AA0"
+        border_color="#FF2896FF"
     />
 
-    <!-- Top-Right Forge Mode Status & Object Budget Pill -->
+    <!-- Top-Right Forge Mode Status & Object Budget Box -->
     <top_bar
-        font="terminal"
+        font="small"
         style="plain"
         size="1.0"
-        title_color="#FF8CE0FF"
-        text_color="#FFD1E0F2"
-        selected_color="#FFFFF5A6"
-        background="panel_top_bar.png"
+        title_color="#FFFFFFFF"
+        text_color="#FF2896FF"
+        selected_color="#FFFFFFFF"
+        background="escape_menu_background.png"
         use_image="true"
         image_tint="#FFFFFFFF"
-        bg_color="#CC0A1426"
-        header_color="#00000000"
-        border_color="#803C8CE6"
+        bg_color="#E805132C"
+        header_color="#90194480"
+        border_color="#FF2896FF"
     />
 
-    <!-- Bottom Control Strip ([F1] Forge Mode / [F2] Menu / [F5] Save) -->
+    <!-- Bottom Control Strip ([F1] Forge Mode / [F2] Menu / [F5] Quick Save) -->
     <bottom_bar
-        font="terminal"
+        font="small"
         style="plain"
         size="1.0"
-        title_color="#FFA6EBFF"
-        text_color="#FFC7E5FF"
-        selected_color="#FFFFF5A6"
-        background="panel_bottom_bar.png"
-        use_image="true"
-        image_tint="#FFFFFFFF"
-        bg_color="#B8081222"
-        header_color="#00000000"
-        border_color="#603578C4"
-    />
-
-    <!-- [F5] Initial Save Map Name Modal -->
-    <save_modal
-        font="terminal"
-        style="plain"
-        size="1.0"
-        title_color="#FFA6EBFF"
-        text_color="#FFB8E0FA"
-        selected_color="#FFFFF2A6"
-        background="panel_modal.png"
-        use_image="true"
-        image_tint="#FFFFFFFF"
-        bg_color="#EC0A1526"
-        header_color="#6014325A"
-        highlight_color="#D8225C9C"
-        border_color="#804498F2"
-    />
-
-    <!-- [F6] MAPS: Add Tags to Cache Modal -->
-    <maps_modal
-        font="terminal"
-        style="plain"
-        size="1.0"
-        title_color="#FFA6EBFF"
-        text_color="#FFD1DBEB"
-        selected_color="#FFFFF299"
-        background="panel_modal.png"
-        use_image="true"
-        image_tint="#FFFFFFFF"
-        bg_color="#E60A1526"
-        header_color="#6014325A"
-        highlight_color="#D8225C9C"
-        border_color="#804498F2"
-    />
-
-    <!-- Status Notification Toast Bar -->
-    <toast_bar
-        font="terminal"
-        style="plain"
-        size="1.0"
-        title_color="#FFA6F2FF"
-        text_color="#FFA6F2FF"
+        title_color="#FFFFFFFF"
+        text_color="#FF2896FF"
         selected_color="#FFFFFFFF"
         background="panel_bottom_bar.png"
         use_image="true"
         image_tint="#FFFFFFFF"
-        bg_color="#D80A182C"
-        header_color="#00000000"
-        border_color="#804498F2"
+        bg_color="#E805132C"
+        header_color="#90194480"
+        border_color="#FF2896FF"
+    />
+
+    <!-- [Esc -> SAVE MAP..] Initial Save Map Name Modal (Halo CE Escape Menu Style) -->
+    <save_modal
+        font="large"
+        style="plain"
+        size="1.0"
+        title_color="#FFFFFFFF"
+        text_color="#FF2896FF"
+        selected_color="#FFFFFFFF"
+        background="escape_menu_background.png"
+        use_image="true"
+        image_tint="#FFFFFFFF"
+        bg_color="#E805132C"
+        header_color="#90194480"
+        highlight_color="#E81E5AA0"
+        border_color="#FF2896FF"
+    />
+
+    <!-- MAPS: Add Tags to Cache Modal -->
+    <maps_modal
+        font="large"
+        style="plain"
+        size="1.0"
+        title_color="#FFFFFFFF"
+        text_color="#FF2896FF"
+        selected_color="#FFFFFFFF"
+        background="escape_menu_background.png"
+        use_image="true"
+        image_tint="#FFFFFFFF"
+        bg_color="#E805132C"
+        header_color="#90194480"
+        highlight_color="#E81E5AA0"
+        border_color="#FF2896FF"
+    />
+
+    <!-- Status Notification Toast Bar -->
+    <toast_bar
+        font="large"
+        style="plain"
+        size="1.0"
+        title_color="#FFFFFFFF"
+        text_color="#FF2896FF"
+        selected_color="#FFFFFFFF"
+        background="panel_bottom_bar.png"
+        use_image="true"
+        image_tint="#FFFFFFFF"
+        bg_color="#E805132C"
+        header_color="#90194480"
+        border_color="#FF2896FF"
     />
 
     <!-- 3D Teleporter In/Out, Objective Markers & Reticle Hover Labels -->
     <markers
-        font="terminal"
+        font="small"
         style="plain"
         size="1.0"
-        title_color="#F259FF8C"
-        text_color="#F2FFE673"
-        selected_color="#F273FFA6"
+        title_color="#FFFFFFFF"
+        text_color="#FF2896FF"
+        selected_color="#FFFFFFFF"
         background="none"
         use_image="false"
     />

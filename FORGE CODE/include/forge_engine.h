@@ -85,6 +85,7 @@ enum forge_ui_modal
 enum forge_palette_category
 {
 	_forge_cat_weapons = 0,
+	_forge_cat_equipment,
 	_forge_cat_vehicles,
 	_forge_cat_bipeds,
 	_forge_cat_scenery,
@@ -171,6 +172,9 @@ struct forge_runtime_state
 	/* Physics Beam / Object Grab State */
 	int32_t grabbed_object_index;
 	int32_t grabbed_live_index;
+	int grabbed_is_new_spawn;
+	float grab_orig_x, grab_orig_y, grab_orig_z;
+	float grab_orig_yaw, grab_orig_pitch, grab_orig_roll;
 	float grab_distance;
 	float grab_yaw, grab_pitch, grab_roll;
 	int32_t hovered_object_index;
@@ -228,6 +232,8 @@ int forge_is_multiplayer_session(void);
 int forge_catalog_entry_allowed(struct forge_catalog_entry const *entry);
 long forge_resolve_engine_tag(uint32_t group_tag, char const *tag_path, uint32_t *out_actual_group);
 int forge_ui_inject_custom_map(char const *donor_map_path);
+int forge_clear_custom_tag_cache(void);
+int forge_reset_all_tag_caches_and_restart(void);
 int forge_ui_save_copy_as(char const *new_map_name);
 void forge_trigger_save_map_action(void);
 void forge_load_saved_map_state_if_present(char const *map_name);
@@ -284,6 +290,13 @@ void forge_network_send_transform(
 void forge_network_send_delete(int32_t live_idx);
 int forge_network_intercept_chat_packet(long machine_index, char const *text, int is_from_client_to_host);
 void forge_runtime_on_map_unload(void);
+int forge_window_is_focused(void);
+short forge_key_state(int vk);
+
+#ifdef _WIN32
+#undef GetAsyncKeyState
+#define GetAsyncKeyState(vk) forge_key_state(vk)
+#endif
 
 #ifdef __cplusplus
 }

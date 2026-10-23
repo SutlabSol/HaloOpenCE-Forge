@@ -174,7 +174,8 @@ step4:
 		edits = (struct forge_scenario_edit_state *)calloc(1, sizeof(*edits));
 		if (edits)
 		{
-			edits->placed_object_count = 2;
+			edits->placed_object_count = 6;
+			edits->placed_objects[0].active = 1;
 			edits->placed_objects[0].category = _forge_object_scenery;
 			edits->placed_objects[0].group_tag = 'scen';
 			snprintf(edits->placed_objects[0].tag_path, FORGE_TAG_PATH_MAX, "scenery\\c_storage\\c_storage");
@@ -182,6 +183,7 @@ step4:
 			edits->placed_objects[0].y = -120.0f;
 			edits->placed_objects[0].z = 1.8f;
 
+			edits->placed_objects[1].active = 1;
 			edits->placed_objects[1].category = _forge_object_vehicle;
 			edits->placed_objects[1].group_tag = 'vehi';
 			snprintf(edits->placed_objects[1].tag_path, FORGE_TAG_PATH_MAX, "vehicles\\wraith\\wraith");
@@ -189,21 +191,45 @@ step4:
 			edits->placed_objects[1].y = -115.0f;
 			edits->placed_objects[1].z = 2.2f;
 
-			edits->ai_spawn_count = 1;
-			snprintf(edits->ai_spawns[0].actor_variant_path, FORGE_TAG_PATH_MAX, "characters\\elite\\elite major plasma rifle");
-			edits->ai_spawns[0].x = 68.0f;
-			edits->ai_spawns[0].y = -118.0f;
-			edits->ai_spawns[0].z = 1.9f;
-			edits->ai_spawns[0].team_designator = _forge_ai_team_enemy_covenant;
-			edits->ai_spawns[0].unit_count = 2;
+			edits->placed_objects[2].active = 1;
+			edits->placed_objects[2].category = _forge_object_scenery;
+			edits->placed_objects[2].group_tag = 'mach';
+			snprintf(edits->placed_objects[2].tag_path, FORGE_TAG_PATH_MAX, "levels\\a10\\devices\\doors\\door small\\door small");
+			edits->placed_objects[2].x = 62.0f;
+			edits->placed_objects[2].y = -118.0f;
+			edits->placed_objects[2].z = 1.8f;
+
+			edits->placed_objects[3].active = 1;
+			edits->placed_objects[3].category = _forge_object_scenery;
+			edits->placed_objects[3].group_tag = 'mach';
+			snprintf(edits->placed_objects[3].tag_path, FORGE_TAG_PATH_MAX, "levels\\a30\\devices\\beam emitter\\beam emitter");
+			edits->placed_objects[3].x = 60.0f;
+			edits->placed_objects[3].y = -116.0f;
+			edits->placed_objects[3].z = 1.8f;
+
+			edits->placed_objects[4].active = 1;
+			edits->placed_objects[4].category = _forge_object_scenery;
+			edits->placed_objects[4].group_tag = 'mach';
+			snprintf(edits->placed_objects[4].tag_path, FORGE_TAG_PATH_MAX, "levels\\a30\\devices\\beam emitter\\beam emitter red");
+			edits->placed_objects[4].x = 58.0f;
+			edits->placed_objects[4].y = -114.0f;
+			edits->placed_objects[4].z = 1.8f;
+
+			edits->placed_objects[5].active = 1;
+			edits->placed_objects[5].category = _forge_object_scenery;
+			edits->placed_objects[5].group_tag = 'lifi';
+			snprintf(edits->placed_objects[5].tag_path, FORGE_TAG_PATH_MAX, "levels\\a10\\devices\\lights\\light fixture cryo");
+			edits->placed_objects[5].x = 64.0f;
+			edits->placed_objects[5].y = -112.0f;
+			edits->placed_objects[5].z = 2.8f;
 
 			donors[0] = forgeasset_out;
 			donors[1] = customforgeasset_out;
 
 			if (forge_export_scenario_map(
-				"FORGE CODE/GAME MAPS/CUSTOM EDITION DEFAULT MAPS/bloodgulch.map",
-				ce_default_dir,
-				pc_maps_dir,
+				"OpenCE Forge/forge_maps/bloodgulch.map",
+				"maps",
+				"custom_maps",
 				donors,
 				2,
 				edits,
@@ -211,9 +237,18 @@ step4:
 				"custom_maps"))
 			{
 				valid = forge_validate_custom_edition_map_file(
-					"custom_maps/forge_bloodgulch_demo.map", ce_default_dir, &tag_count, &corrs);
+					"custom_maps/forge_bloodgulch_demo.map", "custom_maps", &tag_count, &corrs);
 				printf("[Forge Asset Compiler] Exported custom_maps/forge_bloodgulch_demo.map (.bmp + .txt): valid=%d, tags=%d, corrections=%d\n",
 					valid, (int)tag_count, (int)corrs);
+				remove("custom_maps/forge_bloodgulch_demo.map");
+				remove("forge_maps/forge_bloodgulch_demo/forge_bloodgulch_demo.bmp");
+				remove("forge_maps/forge_bloodgulch_demo/forge_bloodgulch_demo.txt");
+			}
+			else
+			{
+				fprintf(stderr, "[Forge Asset Compiler] ERROR: forge_export_scenario_map returned 0!\n");
+				free(edits);
+				return 1;
 			}
 			free(edits);
 		}
