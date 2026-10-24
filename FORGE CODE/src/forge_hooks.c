@@ -15,6 +15,8 @@
 #include "main/console.h"
 #include "models/models.h"
 #include "render/render.h"
+#include "scenario/scenario.h"
+#include "scenario/scenario_definitions.h"
 #include "saved games/player_profile.h"
 #include "text/draw_string.h"
 #include "text/font_group.h"
@@ -77,6 +79,9 @@ extern boolean orig_network_chat_typing(void);
 extern void orig_network_chat_handle_up(long machine_index, void const *entries, boolean from_stream);
 extern void orig_director_update(real time_delta_sec);
 extern short orig_director_get_perspective(short local_player_index);
+extern struct observer_result const *orig_render_interpolation_camera(
+	short local_player_index,
+	struct observer_result const *fallback);
 extern void orig_first_person_weapon_draw(void);
 extern void orig_hud_render_weapon_interface(struct player_datum *player);
 extern void orig_render_model(
@@ -1056,7 +1061,451 @@ boolean pc_menu_event_function_invoke(
 		return TRUE;
 	}
 
+	/* Settings -> Controls Setup ("FORGE" and "FORGE PAD" tabs) */
+	if (fn_name &&
+		(strcmp(fn_name, "controls screen init") == 0 ||
+		 strcmp(fn_name, "controls screen defaults") == 0 ||
+		 strcmp(fn_name, "controls screen change set") == 0 ||
+		 strcmp(fn_name, "controls binding slot") == 0 ||
+		 strcmp(fn_name, "controls begin binding") == 0))
+	{
+		extern boolean forge_controls_menu_event(struct forge_widget_instance *w, void *event_ptr, char const *fn_name, long function_index, boolean *widget_deleted);
+		if (forge_controls_menu_event(widget, event_ptr, fn_name, function_index, widget_deleted))
+			return TRUE;
+	}
+
 	return orig_pc_menu_event_function_invoke(widget_ptr, event_ptr, function_index, widget_deleted);
+}
+
+/* ---------- Settings -> Controls Setup ("FORGE" & "FORGE PAD" Tabs) Implementation */
+
+static struct
+{
+	int initialized;
+	int32_t pending_vk[FORGE_BIND_COUNT];
+	int32_t pending_gp[FORGE_BIND_COUNT];
+	float pending_look_sens;
+	float pending_fly_speed;
+	int slot; /* 0 = Keyboard/Mouse, 1 = Controller */
+	int capturing_action; /* -1 when idle, 0..FORGE_BIND_COUNT-1 when waiting for input */
+	int capturing_slot;
+	unsigned long capture_start_ms;
+	int prev_vk_down[256];
+	int prev_gp_down[FORGE_GP_COUNT];
+} s_forge_controls_ui = { 0, { 0 }, { 0 }, 1.0f, 1.0f, 0, -1, 0, 0, { 0 }, { 0 } };
+
+static char const *const s_forge_bind_labels[FORGE_BIND_COUNT] = {
+	"FORGE / SPARTAN",
+	"OBJECT PALETTE",
+	"3RD-PERSON VIEW",
+	"QUICK SAVE MAP",
+	"ROTATE ITEM",
+	"SNAP TO FLOOR",
+	"SNAP TO SURFACE",
+	"ROTATION SNAP",
+	"OBJECT OPTIONS",
+	"DELETE OBJECT"
+};
+
+static struct forge_widget_instance *fw_screen_of(struct forge_widget_instance *w)
+{
+	while (w && w->parent)
+		w = w->parent;
+	return w;
+}
+
+static struct forge_widget_instance *fw_control_row(struct forge_widget_instance *w)
+{
+	for (; w; w = w->parent)
+	{
+		if (w->name && strncmp(w->name, "op_command_", 11) == 0)
+			return w;
+	}
+	return NULL;
+}
+
+static int fw_controls_group(struct forge_widget_instance *w)
+{
+	struct forge_widget_instance *sp = fw_named(fw_screen_of(w), "group_spinner", 0);
+	return sp ? (int)sp->parameters.list.selected_index : 0;
+}
+
+static void forge_controls_ui_ensure_loaded(void)
+{
+	int i;
+	if (g_forge.bind_vk[0] == 0 && g_forge.bind_gp[0] == 0)
+	{
+		forge_controls_init_defaults();
+		forge_controls_load();
+	}
+	if (!s_forge_controls_ui.initialized)
+	{
+		for (i = 0; i < FORGE_BIND_COUNT; i++)
+		{
+			s_forge_controls_ui.pending_vk[i] = g_forge.bind_vk[i];
+			s_forge_controls_ui.pending_gp[i] = g_forge.bind_gp[i];
+		}
+		s_forge_controls_ui.pending_look_sens = (g_forge.controller_look_sens >= 0.25f) ? g_forge.controller_look_sens : 1.0f;
+		s_forge_controls_ui.pending_fly_speed = (g_forge.controller_fly_speed >= 0.25f) ? g_forge.controller_fly_speed : 1.0f;
+		s_forge_controls_ui.capturing_action = -1;
+		s_forge_controls_ui.initialized = 1;
+	}
+}
+
+static void forge_controls_snapshot_input(void)
+{
+	int vk, gp;
+	float lx, ly, rx, ry, lt, rt;
+	forge_poll_controller_state(&lx, &ly, &rx, &ry, &lt, &rt);
+	for (vk = 1; vk < 255; vk++)
+		s_forge_controls_ui.prev_vk_down[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+	for (gp = 1; gp < FORGE_GP_COUNT; gp++)
+		s_forge_controls_ui.prev_gp_down[gp] = forge_gp_button_down(gp);
+}
+
+boolean forge_controls_menu_event(
+	struct forge_widget_instance *widget,
+	void *event_ptr,
+	char const *fn_name,
+	long function_index,
+	boolean *widget_deleted)
+{
+	int group = fw_controls_group(widget);
+	int i;
+
+	if (strcmp(fn_name, "controls screen init") == 0)
+	{
+		s_forge_controls_ui.initialized = 0;
+		forge_controls_ui_ensure_loaded();
+		orig_pc_menu_event_function_invoke(widget, event_ptr, function_index, widget_deleted);
+		return TRUE;
+	}
+	if (strcmp(fn_name, "controls screen defaults") == 0)
+	{
+		forge_controls_ui_ensure_loaded();
+		if (group == 4 || group == 5)
+		{
+			int32_t saved_vk[FORGE_BIND_COUNT];
+			int32_t saved_gp[FORGE_BIND_COUNT];
+			float saved_ls = g_forge.controller_look_sens;
+			float saved_fs = g_forge.controller_fly_speed;
+			for (i = 0; i < FORGE_BIND_COUNT; i++)
+			{
+				saved_vk[i] = g_forge.bind_vk[i];
+				saved_gp[i] = g_forge.bind_gp[i];
+			}
+			forge_controls_init_defaults();
+			for (i = 0; i < FORGE_BIND_COUNT; i++)
+			{
+				s_forge_controls_ui.pending_vk[i] = g_forge.bind_vk[i];
+				s_forge_controls_ui.pending_gp[i] = g_forge.bind_gp[i];
+				g_forge.bind_vk[i] = saved_vk[i];
+				g_forge.bind_gp[i] = saved_gp[i];
+			}
+			s_forge_controls_ui.pending_look_sens = 1.0f;
+			s_forge_controls_ui.pending_fly_speed = 1.0f;
+			g_forge.controller_look_sens = saved_ls;
+			g_forge.controller_fly_speed = saved_fs;
+			s_forge_controls_ui.capturing_action = -1;
+			return TRUE;
+		}
+		return orig_pc_menu_event_function_invoke(widget, event_ptr, function_index, widget_deleted);
+	}
+	if (strcmp(fn_name, "controls screen change set") == 0)
+	{
+		forge_controls_ui_ensure_loaded();
+		for (i = 0; i < FORGE_BIND_COUNT; i++)
+		{
+			g_forge.bind_vk[i] = s_forge_controls_ui.pending_vk[i];
+			g_forge.bind_gp[i] = s_forge_controls_ui.pending_gp[i];
+		}
+		g_forge.controller_look_sens = s_forge_controls_ui.pending_look_sens;
+		g_forge.controller_fly_speed = s_forge_controls_ui.pending_fly_speed;
+		forge_controls_save();
+		return orig_pc_menu_event_function_invoke(widget, event_ptr, function_index, widget_deleted);
+	}
+	if (strcmp(fn_name, "controls binding slot") == 0)
+	{
+		forge_controls_ui_ensure_loaded();
+		if (group == 4)
+		{
+			s_forge_controls_ui.slot = !s_forge_controls_ui.slot;
+			orig_pc_menu_event_function_invoke(widget, event_ptr, function_index, widget_deleted);
+			return TRUE;
+		}
+		if (group == 5)
+		{
+			struct forge_widget_instance *row = fw_control_row(widget);
+			int row_idx = row ? (atoi(row->name + 11) - 1) : -1;
+			int dir = 1;
+			if ((GetAsyncKeyState(VK_LEFT) & 0x8000) || (GetAsyncKeyState('A') & 0x8000) || forge_gp_button_down(FORGE_GP_DPAD_LEFT))
+			{
+				dir = -1;
+			}
+			else if (event_ptr)
+			{
+				short const *ev_s = (short const *)event_ptr;
+				if ((ev_s[0] == 2 && ev_s[2] == 14) || (ev_s[0] == 0 && ev_s[2] < 0))
+					dir = -1;
+			}
+			if (row_idx == 0)
+			{
+				s_forge_controls_ui.pending_look_sens += (float)dir * 0.25f;
+				if (s_forge_controls_ui.pending_look_sens < 0.25f) s_forge_controls_ui.pending_look_sens = 0.25f;
+				if (s_forge_controls_ui.pending_look_sens > 2.50f) s_forge_controls_ui.pending_look_sens = 2.50f;
+				return TRUE;
+			}
+			if (row_idx == 1)
+			{
+				s_forge_controls_ui.pending_fly_speed += (float)dir * 0.25f;
+				if (s_forge_controls_ui.pending_fly_speed < 0.25f) s_forge_controls_ui.pending_fly_speed = 0.25f;
+				if (s_forge_controls_ui.pending_fly_speed > 2.50f) s_forge_controls_ui.pending_fly_speed = 2.50f;
+				return TRUE;
+			}
+			s_forge_controls_ui.slot = 1;
+			return TRUE;
+		}
+		s_forge_controls_ui.slot = !s_forge_controls_ui.slot;
+		return orig_pc_menu_event_function_invoke(widget, event_ptr, function_index, widget_deleted);
+	}
+	if (strcmp(fn_name, "controls begin binding") == 0)
+	{
+		forge_controls_ui_ensure_loaded();
+		if (group == 4)
+		{
+			struct forge_widget_instance *row = fw_control_row(widget);
+			int row_idx = row ? (atoi(row->name + 11) - 1) : -1;
+			if (row_idx >= 0 && row_idx < FORGE_BIND_COUNT)
+			{
+				s_forge_controls_ui.capturing_action = row_idx;
+				s_forge_controls_ui.capturing_slot = s_forge_controls_ui.slot;
+				s_forge_controls_ui.capture_start_ms = system_milliseconds();
+				forge_controls_snapshot_input();
+				return TRUE;
+			}
+		}
+		else if (group == 5)
+		{
+			struct forge_widget_instance *row = fw_control_row(widget);
+			int row_idx = row ? (atoi(row->name + 11) - 1) : -1;
+			if (row_idx == 0)
+			{
+				s_forge_controls_ui.pending_look_sens += 0.25f;
+				if (s_forge_controls_ui.pending_look_sens > 2.50f)
+					s_forge_controls_ui.pending_look_sens = 0.25f;
+				return TRUE;
+			}
+			if (row_idx == 1)
+			{
+				s_forge_controls_ui.pending_fly_speed += 0.25f;
+				if (s_forge_controls_ui.pending_fly_speed > 2.50f)
+					s_forge_controls_ui.pending_fly_speed = 0.25f;
+				return TRUE;
+			}
+		}
+		return orig_pc_menu_event_function_invoke(widget, event_ptr, function_index, widget_deleted);
+	}
+	return FALSE;
+}
+
+static void forge_controls_menu_update(struct forge_widget_instance *list)
+{
+	int group = fw_controls_group(list);
+	struct forge_widget_instance *row;
+	struct forge_widget_instance *focused_row = fw_control_row(list ? list->focused_child : NULL);
+	float lx, ly, rx, ry, lt, rt;
+
+	forge_controls_ui_ensure_loaded();
+
+	if (group < 4)
+	{
+		s_forge_controls_ui.capturing_action = -1;
+		for (row = list ? list->child : NULL; row; row = row->next)
+		{
+			if (row->name && strncmp(row->name, "op_command_", 11) == 0)
+			{
+				int idx = atoi(row->name + 11) - 1;
+				if (idx >= 0 && idx < 7)
+				{
+					row->vertical_offset = (short)(103 + idx * 30);
+				}
+				else if (idx >= 7)
+				{
+					row->visible = FALSE;
+					if (list->focused_child == row)
+					{
+						list->focused_child = list->child;
+						list->parameters.list.selected_index = 0;
+					}
+				}
+			}
+		}
+		return;
+	}
+
+	forge_poll_controller_state(&lx, &ly, &rx, &ry, &lt, &rt);
+
+	/* Poll for new Keyboard/Mouse or Controller button press when capturing */
+	if (s_forge_controls_ui.capturing_action >= 0 && s_forge_controls_ui.capturing_action < FORGE_BIND_COUNT)
+	{
+		unsigned long now_ms = system_milliseconds();
+		int act = s_forge_controls_ui.capturing_action;
+		int vk, gp;
+
+		if (now_ms - s_forge_controls_ui.capture_start_ms >= 120)
+		{
+			int esc_down = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+			int del_down = ((GetAsyncKeyState(VK_DELETE) & 0x8000) || (GetAsyncKeyState(VK_BACK) & 0x8000)) != 0;
+
+			if (esc_down && !s_forge_controls_ui.prev_vk_down[VK_ESCAPE])
+			{
+				s_forge_controls_ui.capturing_action = -1;
+			}
+			else if (del_down && (!s_forge_controls_ui.prev_vk_down[VK_DELETE] && !s_forge_controls_ui.prev_vk_down[VK_BACK]))
+			{
+				if (s_forge_controls_ui.capturing_slot == 0)
+					s_forge_controls_ui.pending_vk[act] = 0;
+				else
+					s_forge_controls_ui.pending_gp[act] = FORGE_GP_NONE;
+				s_forge_controls_ui.capturing_action = -1;
+			}
+			else
+			{
+				/* Check physical gamepad buttons first -> binds Controller column (slot 1) */
+				for (gp = 1; gp < FORGE_GP_COUNT; gp++)
+				{
+					int down = forge_gp_button_down(gp);
+					if (down && !s_forge_controls_ui.prev_gp_down[gp])
+					{
+						int other;
+						for (other = 0; other < FORGE_BIND_COUNT; other++)
+						{
+							if (s_forge_controls_ui.pending_gp[other] == gp)
+								s_forge_controls_ui.pending_gp[other] = FORGE_GP_NONE;
+						}
+						s_forge_controls_ui.pending_gp[act] = gp;
+						s_forge_controls_ui.capturing_action = -1;
+						break;
+					}
+				}
+
+				/* Check keyboard & mouse buttons -> binds Key/Mouse column (slot 0) */
+				if (s_forge_controls_ui.capturing_action >= 0)
+				{
+					for (vk = 1; vk < 254; vk++)
+					{
+						int down;
+						if (vk == VK_ESCAPE || vk == VK_DELETE || vk == VK_BACK)
+							continue;
+						if (vk == VK_SHIFT || vk == VK_CONTROL || vk == 0x12 /* VK_MENU */)
+							continue;
+						if ((vk == VK_LBUTTON || vk == VK_RETURN) && (now_ms - s_forge_controls_ui.capture_start_ms < 260))
+							continue;
+						down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+						if (down && !s_forge_controls_ui.prev_vk_down[vk])
+						{
+							char const *vname = forge_vk_display_name(vk);
+							if (vname && strcmp(vname, "-") != 0)
+							{
+								int other;
+								for (other = 0; other < FORGE_BIND_COUNT; other++)
+								{
+									if (s_forge_controls_ui.pending_vk[other] == vk)
+										s_forge_controls_ui.pending_vk[other] = 0;
+								}
+								s_forge_controls_ui.pending_vk[act] = vk;
+								s_forge_controls_ui.capturing_action = -1;
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+
+		for (vk = 1; vk < 255; vk++)
+			s_forge_controls_ui.prev_vk_down[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+		for (gp = 1; gp < FORGE_GP_COUNT; gp++)
+			s_forge_controls_ui.prev_gp_down[gp] = forge_gp_button_down(gp);
+	}
+
+	/* Populate rows for group == 4 (FORGE) or group == 5 (FORGE PAD) */
+	for (row = list ? list->child : NULL; row; row = row->next)
+	{
+		int idx;
+		struct forge_widget_instance *lbl_w;
+		struct forge_widget_instance *bind0_w;
+		struct forge_widget_instance *bind1_w;
+		char col0[64], col1[64];
+
+		if (!row->name || strncmp(row->name, "op_command_", 11) != 0)
+			continue;
+		idx = atoi(row->name + 11) - 1;
+		lbl_w = fw_named(row, "command_label", 0);
+		bind0_w = fw_named(row, "command_binding", 0);
+		bind1_w = fw_named(row, "command_binding", 1);
+
+		if (group == 4)
+		{
+			if (idx < 0 || idx >= FORGE_BIND_COUNT)
+			{
+				row->visible = FALSE;
+				continue;
+			}
+			row->visible = TRUE;
+			row->vertical_offset = (short)(100 + idx * 26);
+			fw_text_set_ascii(lbl_w, s_forge_bind_labels[idx]);
+
+			if (s_forge_controls_ui.capturing_action == idx && s_forge_controls_ui.capturing_slot == 0)
+				snprintf(col0, sizeof(col0), "PRESS KEY/PAD");
+			else if (row == focused_row && s_forge_controls_ui.slot == 0)
+				snprintf(col0, sizeof(col0), "> %s <", forge_vk_display_name(s_forge_controls_ui.pending_vk[idx]));
+			else
+				snprintf(col0, sizeof(col0), "%s", forge_vk_display_name(s_forge_controls_ui.pending_vk[idx]));
+
+			if (s_forge_controls_ui.capturing_action == idx && s_forge_controls_ui.capturing_slot == 1)
+				snprintf(col1, sizeof(col1), "PRESS KEY/PAD");
+			else if (row == focused_row && s_forge_controls_ui.slot == 1)
+				snprintf(col1, sizeof(col1), "> %s <", forge_gp_display_name(s_forge_controls_ui.pending_gp[idx]));
+			else
+				snprintf(col1, sizeof(col1), "%s", forge_gp_display_name(s_forge_controls_ui.pending_gp[idx]));
+
+			fw_text_set_ascii(bind0_w, col0);
+			fw_text_set_ascii(bind1_w, col1);
+		}
+		else if (group == 5)
+		{
+			if (idx == 0 || idx == 1)
+			{
+				int pct = (int)((idx == 0 ? s_forge_controls_ui.pending_look_sens : s_forge_controls_ui.pending_fly_speed) * 100.0f + 0.5f);
+				row->visible = TRUE;
+				row->vertical_offset = (short)(103 + idx * 30);
+				fw_text_set_ascii(lbl_w, (idx == 0) ? "PAD LOOK SENS" : "PAD FLY SPEED");
+				if (row == focused_row)
+					snprintf(col0, sizeof(col0), "< %d%% >", pct);
+				else
+					snprintf(col0, sizeof(col0), "%d%%", pct);
+				snprintf(col1, sizeof(col1), "LEFT / RIGHT");
+				fw_text_set_ascii(bind0_w, col0);
+				fw_text_set_ascii(bind1_w, col1);
+			}
+			else
+			{
+				row->visible = FALSE;
+				if (list->focused_child == row)
+				{
+					list->focused_child = list->child;
+					list->parameters.list.selected_index = 0;
+				}
+			}
+		}
+	}
+
+	if (list && list->parameters.list.extended_description)
+	{
+		list->parameters.list.extended_description->parameters.text_box.string_list_index =
+			(s_forge_controls_ui.capturing_action >= 0) ? 2 : (focused_row ? 1 : 0);
+	}
 }
 
 void pc_menu_game_data_function_invoke(
@@ -1083,6 +1532,18 @@ void pc_menu_game_data_function_invoke(
 		strcmp(w_name, "forge_inject_list") == 0)
 	{
 		update_forge_inject_widget(widget);
+		return;
+	}
+	if (fn_name && strcmp(fn_name, "controls update menu") == 0)
+	{
+		int group = fw_controls_group(widget);
+		if (group >= 4)
+		{
+			forge_controls_menu_update(widget);
+			return;
+		}
+		orig_pc_menu_game_data_function_invoke(widget_ptr, function);
+		forge_controls_menu_update(widget);
 		return;
 	}
 
@@ -1171,6 +1632,17 @@ void pc_menu_game_data_function_invoke(
 
 /* ---------- Frame Update, HUD, Camera, 343 Guilty Spark Model & Console Hooks */
 
+int forge_is_main_menu_active(void)
+{
+	struct scenario *scen = global_scenario_get();
+	char const *cur_map = main_get_map_name();
+	if (!scen || scen->type == 2 /* _scenario_type_main_menu */)
+		return 1;
+	if (cur_map && (_stricmp(cur_map, "levels\\ui\\ui") == 0 || _stricmp(cur_map, "ui") == 0))
+		return 1;
+	return 0;
+}
+
 void network_chat_update(void)
 {
 	unsigned long now = system_milliseconds();
@@ -1179,7 +1651,23 @@ void network_chat_update(void)
 
 	orig_network_chat_update();
 
-	/* Reset per-map monitor state when switching maps or returning to levels\ui\ui */
+	/* When on the UI main menu (levels\ui\ui), main_load_ui_scenario leaves main_get_map_name()
+	 * set to the previous playable map while global_scenario_get()->type == _scenario_type_main_menu (2).
+	 * Reset Forge monitor/modal state and never run Forge camera/update hooks on the UI background scene! */
+	if (forge_is_main_menu_active())
+	{
+		g_last_forge_map_name[0] = 0;
+		g_forge.monitor_cam_initialized = 0;
+		g_forge.active_modal = _forge_modal_none;
+		g_forge.mode = _forge_mode_play;
+		g_forge.grabbed_live_index = -1;
+		g_forge.grabbed_object_index = NONE;
+		g_forge.hovered_object_index = NONE;
+		g_forge.hovered_live_index = -1;
+		return;
+	}
+
+	/* Reset per-map monitor state when switching maps */
 	if (cur_map && strcmp(cur_map, g_last_forge_map_name) != 0)
 	{
 		snprintf(g_last_forge_map_name, sizeof(g_last_forge_map_name), "%s", cur_map);
@@ -1195,10 +1683,6 @@ void network_chat_update(void)
 		g_forge.save_map_name[0] = 0;
 		g_forge.save_map_name_len = 0;
 		memset(&g_forge.edit_state, 0, sizeof(g_forge.edit_state));
-		if (strcmp(cur_map, "levels\\ui\\ui") == 0)
-		{
-			g_forge.mode = _forge_mode_play;
-		}
 	}
 
 	if (g_last_forge_frame_ms != 0)
@@ -1222,9 +1706,7 @@ void network_chat_draw(short local_player_index)
 	orig_network_chat_draw(local_player_index);
 
 	/* Never draw Forge HUD overlay on the main menu (levels\ui\ui) or outside a Forge session */
-	if (!g_forge_session_enabled)
-		return;
-	if (main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") == 0)
+	if (!g_forge_session_enabled || forge_is_main_menu_active())
 		return;
 
 	font_index = hud_get_font_index();
@@ -1256,7 +1738,7 @@ boolean network_chat_typing(void)
 		return TRUE;
 	/* Only block native keyboard/Escape input when a Forge modal is open on screen! */
 	if (g_forge_session_enabled && g_forge.initialized &&
-		main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") != 0 &&
+		!forge_is_main_menu_active() &&
 		g_forge.active_modal != _forge_modal_none)
 	{
 		return TRUE;
@@ -1278,7 +1760,7 @@ void network_chat_handle_up(long machine_index, void const *entries, boolean fro
 void director_update(real time_delta_sec)
 {
 	orig_director_update(time_delta_sec);
-	if (g_forge_session_enabled && g_forge.initialized)
+	if (g_forge_session_enabled && g_forge.initialized && !forge_is_main_menu_active())
 	{
 		forge_3d_apply_monitor_camera(0);
 	}
@@ -1286,8 +1768,7 @@ void director_update(real time_delta_sec)
 
 short director_get_perspective(short local_player_index)
 {
-	if (g_forge_session_enabled && g_forge.initialized &&
-		main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") != 0)
+	if (g_forge_session_enabled && g_forge.initialized && !forge_is_main_menu_active())
 	{
 		if (g_forge.mode == _forge_mode_3d_monitor && g_forge.third_person_view)
 		{
@@ -1297,11 +1778,28 @@ short director_get_perspective(short local_player_index)
 	return orig_director_get_perspective(local_player_index);
 }
 
+struct observer_result const *render_interpolation_camera(
+	short local_player_index,
+	struct observer_result const *fallback)
+{
+	struct observer_result const *base = orig_render_interpolation_camera(local_player_index, fallback);
+	if (base && g_forge_session_enabled && g_forge.initialized &&
+		!forge_is_main_menu_active() && local_player_index == 0 &&
+		g_forge.mode == _forge_mode_3d_monitor)
+	{
+		static struct observer_result s_live_obs;
+		s_live_obs = *base;
+		if (forge_3d_fill_live_observer_result(&s_live_obs))
+			return &s_live_obs;
+	}
+	return base;
+}
+
 void first_person_weapon_draw(void)
 {
 	if (g_forge_session_enabled && g_forge.initialized &&
 		g_forge.mode != _forge_mode_play &&
-		main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") != 0)
+		!forge_is_main_menu_active())
 	{
 		/* Hide player's first-person hands & weapon model when in Forge Mode */
 		return;
@@ -1316,8 +1814,7 @@ void game_engine_post_rasterize_objects(void)
 {
 	orig_game_engine_post_rasterize_objects();
 
-	if (g_forge_session_enabled && g_forge.initialized &&
-		main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") != 0)
+	if (g_forge_session_enabled && g_forge.initialized && !forge_is_main_menu_active())
 	{
 		/* Render 3D Translucent Objective/Spawn/Teleporter Markers and 3D Spawn Menu Preview
 		 * AFTER sky, opaque objects, BSP lightmaps, BSP diffuse textures, and fog have been drawn!
@@ -1334,7 +1831,7 @@ void hud_render_weapon_interface(struct player_datum *player)
 {
 	if (g_forge_session_enabled && g_forge.initialized &&
 		g_forge.mode != _forge_mode_play &&
-		main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") != 0)
+		!forge_is_main_menu_active())
 	{
 		/* Hide weapon HUD, weapon reticle, and 'No Weapon' prompt in Forge mode (unarmed reticle drawn in forge_3d_draw_hud) */
 		return;
@@ -1357,8 +1854,7 @@ void render_model(
 	short forced_shader_permutation_index,
 	unsigned long flags)
 {
-	if (g_forge_session_enabled && g_forge.initialized &&
-		main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") != 0)
+	if (g_forge_session_enabled && g_forge.initialized && !forge_is_main_menu_active())
 	{
 		if (unique_identifier != NONE)
 		{
@@ -1381,6 +1877,19 @@ void render_model(
 			/* Render dynamic Cached Tag objects and Monitor player units */
 			if (forge_monitor_render_player_unit(unique_identifier, lighting, flags))
 				return;
+
+			/* For the currently held Forge object, bypass 30 Hz render interpolation and use live 60+ Hz node matrices */
+			if (unique_identifier == g_forge.grabbed_object_index && g_forge.grabbed_live_index >= 0)
+			{
+				struct object_datum *grab_obj = (struct object_datum *)object_try_and_get_and_verify_type(unique_identifier, (unsigned long)-1);
+				if (grab_obj && grab_obj->object.node_matrices.size > 0)
+				{
+					struct real_matrix4x3 const *live_mats =
+						(struct real_matrix4x3 const *)object_header_block_get(unique_identifier, &grab_obj->object.node_matrices);
+					if (live_mats)
+						node_matrices = live_mats;
+				}
+			}
 		}
 	}
 
@@ -1439,8 +1948,7 @@ boolean hs_compile_and_evaluate(char const *source)
 
 void hs_runtime_update(void)
 {
-	if (g_forge_session_enabled &&
-		main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") != 0)
+	if (g_forge_session_enabled && !forge_is_main_menu_active())
 	{
 		/* Suppress scenario startup/continuous scripts in Forge mode so SP maps load straight in with no cutscenes */
 		return;
@@ -1450,8 +1958,7 @@ void hs_runtime_update(void)
 
 void cinematic_start(void)
 {
-	if (g_forge_session_enabled &&
-		main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") != 0)
+	if (g_forge_session_enabled && !forge_is_main_menu_active())
 	{
 		return;
 	}
@@ -1460,8 +1967,7 @@ void cinematic_start(void)
 
 boolean scenario_trigger_volume_test_object(short trigger_volume_index, long object_index)
 {
-	if (g_forge_session_enabled &&
-		main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") != 0)
+	if (g_forge_session_enabled && !forge_is_main_menu_active())
 	{
 		/* Suppress all script trigger volumes and BSP switch trigger volumes in Forge mode */
 		return FALSE;
@@ -1539,6 +2045,13 @@ void menu_tags_loaded(char const *map_name)
 	g_forge.grabbed_object_index = NONE;
 	g_forge.hovered_live_index = -1;
 	g_forge.hovered_object_index = NONE;
+
+	if (map_name && (_stricmp(map_name, "ui") == 0 || _stricmp(map_name, "levels\\ui\\ui") == 0))
+	{
+		g_forge_session_enabled = 0;
+		g_forge.mode = _forge_mode_play;
+		g_forge.active_modal = _forge_modal_none;
+	}
 
 	/* Patch "SAVE FORGE MAP" button into the in-game Escape Pause Menu when in a Forge session */
 	if (g_forge_session_enabled && map_name && strcmp(map_name, "ui") != 0)

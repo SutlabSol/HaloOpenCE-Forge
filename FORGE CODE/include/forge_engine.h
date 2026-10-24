@@ -14,10 +14,10 @@
 extern "C" {
 #endif
 
-/* ---------- Forge Network Protocol Isolation ('F' << 8 | 29 = 0x461D) */
+/* ---------- Forge Network Protocol Isolation ('F' << 8 | 38 = 0x4626) */
 
-#define FORGE_NETWORK_VERSION 0x461D
-#define STANDARD_OPENCE_NETWORK_VERSION 29
+#define FORGE_NETWORK_VERSION 0x4626
+#define STANDARD_OPENCE_NETWORK_VERSION 38
 #define _forge_ai_team_friendly_human _forge_ai_team_friendly
 
 extern int g_forge_session_enabled;
@@ -90,6 +90,7 @@ enum forge_palette_category
 	_forge_cat_bipeds,
 	_forge_cat_scenery,
 	_forge_cat_barriers_devices,
+	_forge_cat_lights,
 	_forge_cat_spawns_teleporters,
 	_forge_cat_objectives,
 	_forge_cat_ai_squads,
@@ -220,9 +221,64 @@ struct forge_runtime_state
 	struct forge_scenario_edit_state edit_state;
 	struct forge_live_instance live_instances[FORGE_MAX_LIVE_INSTANCES];
 	int live_instance_count;
+
+	/* Forge Controls & Controller State */
+	int using_controller;
+	int bind_vk[10];
+	int bind_gp[10];
+	float controller_look_sens;
+	float controller_fly_speed;
+};
+
+enum forge_bind_action
+{
+	FORGE_BIND_TOGGLE_MODE = 0,
+	FORGE_BIND_PALETTE = 1,
+	FORGE_BIND_THIRD_PERSON = 2,
+	FORGE_BIND_QUICK_SAVE = 3,
+	FORGE_BIND_ROTATE_HOLD = 4,
+	FORGE_BIND_SNAP_FLOOR = 5,
+	FORGE_BIND_SNAP_SURFACE = 6,
+	FORGE_BIND_ROT_SNAP = 7,
+	FORGE_BIND_OBJECT_OPTIONS = 8,
+	FORGE_BIND_DELETE_OBJECT = 9,
+	FORGE_BIND_COUNT = 10
+};
+
+enum forge_gamepad_button
+{
+	FORGE_GP_NONE = 0,
+	FORGE_GP_A = 1,
+	FORGE_GP_B = 2,
+	FORGE_GP_X = 3,
+	FORGE_GP_Y = 4,
+	FORGE_GP_BLACK = 5,
+	FORGE_GP_WHITE = 6,
+	FORGE_GP_LTRIGGER = 7,
+	FORGE_GP_RTRIGGER = 8,
+	FORGE_GP_DPAD_UP = 9,
+	FORGE_GP_DPAD_DOWN = 10,
+	FORGE_GP_DPAD_LEFT = 11,
+	FORGE_GP_DPAD_RIGHT = 12,
+	FORGE_GP_START = 13,
+	FORGE_GP_BACK = 14,
+	FORGE_GP_LTHUMB = 15,
+	FORGE_GP_RTHUMB = 16,
+	FORGE_GP_COUNT = 17
 };
 
 extern struct forge_runtime_state g_forge;
+
+void forge_controls_init_defaults(void);
+void forge_controls_load(void);
+void forge_controls_save(void);
+char const *forge_vk_display_name(int vk);
+char const *forge_gp_display_name(int gp);
+char const *forge_gp_icon_token(int gp);
+char const *forge_action_prompt(int action);
+int forge_gp_button_down(int gp);
+int forge_action_down(int action);
+void forge_poll_controller_state(float *out_lx, float *out_ly, float *out_rx, float *out_ry, float *out_lt, float *out_rt);
 
 /* ---------- Prototypes: forge_runtime_tags.c */
 
@@ -262,6 +318,8 @@ void forge_blueprint_draw(short window_x0, short window_y0, short window_x1, sho
 
 void forge_3d_update(float dt);
 void forge_3d_apply_monitor_camera(short local_player_index);
+int forge_3d_fill_live_observer_result(void *out_observer_result);
+int forge_is_main_menu_active(void);
 void forge_3d_draw_hud(short local_player_index, short window_x0, short window_y0, short window_x1, short window_y1, long font_index, short line_height);
 int32_t forge_3d_spawn_object_at(
 	uint32_t group_tag,

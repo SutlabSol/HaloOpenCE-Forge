@@ -274,7 +274,7 @@ void forge_blueprint_update(float dt)
 
 void forge_blueprint_apply_camera(void)
 {
-	struct observer_command cmd;
+	static struct observer_command cmd;
 	long unit_idx;
 
 	memset(&cmd, 0, sizeof(cmd));

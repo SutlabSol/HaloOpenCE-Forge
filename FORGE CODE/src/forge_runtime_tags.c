@@ -443,7 +443,7 @@ int g_forge_session_enabled = 1;
 
 int forge_get_network_version(void)
 {
-	return g_forge_session_enabled ? 0x461D : 29;
+	return g_forge_session_enabled ? 0x4626 : 38;
 }
 
 void forge_set_status(char const *fmt, ...)
@@ -544,6 +544,41 @@ static int is_forge_door_tag(uint32_t grp, char const *tag_path)
 	{
 		if (strstr(tag_path, "doorblinker") == NULL && strstr(tag_path, "door_blast_collision") == NULL)
 			return 1;
+	}
+	return 0;
+}
+
+static int is_forge_light_beacon_emitter_tag(uint32_t grp, char const *tag_path)
+{
+	char lower_buf[260];
+	size_t i;
+
+	if (!tag_path || !tag_path[0])
+		return 0;
+	if (is_forge_door_tag(grp, tag_path))
+		return 0;
+	if (grp == 'lifi')
+		return 1;
+	if (grp != 0 && grp != 'scen' && grp != 'mach')
+		return 0;
+
+	for (i = 0; tag_path[i] && i + 1 < sizeof(lower_buf); i++)
+	{
+		char ch = tag_path[i];
+		if (ch >= 'A' && ch <= 'Z')
+			ch = (char)(ch - 'A' + 'a');
+		lower_buf[i] = ch;
+	}
+	lower_buf[i] = '\0';
+
+	if (strstr(lower_buf, "light") != NULL ||
+		strstr(lower_buf, "spotlight") != NULL ||
+		strstr(lower_buf, "beacon") != NULL ||
+		strstr(lower_buf, "emitter") != NULL ||
+		strstr(lower_buf, "ctorch") != NULL ||
+		strstr(lower_buf, "torch") != NULL)
+	{
+		return 1;
 	}
 	return 0;
 }
@@ -695,6 +730,16 @@ int forge_catalog_entry_allowed(struct forge_catalog_entry const *entry)
 	if (is_forge_door_tag(entry->group_tag, entry->tag_path))
 	{
 		return (entry->category == _forge_cat_barriers_devices) ? 1 : 0;
+	}
+	/* Lights, beacons, and emitters have their own dedicated LIGHTS category (_forge_cat_lights) */
+	if (entry->category == _forge_cat_lights)
+	{
+		if (!is_forge_light_beacon_emitter_tag(entry->group_tag, entry->tag_path))
+			return 0;
+	}
+	else if (is_forge_light_beacon_emitter_tag(entry->group_tag, entry->tag_path))
+	{
+		return 0;
 	}
 	if (entry->group_tag == 'mach' || entry->group_tag == 'lifi')
 	{
@@ -860,7 +905,7 @@ static void scan_cached_tags_manifest(char const *manifest_path)
 				if (src_id != 2 && (grp == 'weap' || grp == 'eqip') && is_excluded_weapon_or_equipment_tag(tag_path))
 					continue;
 
-				/* Map group tag directly to the separated WEAPONS vs EQUIPMENT vs VEHICLES vs SCENERY vs DOORS tabs */
+				/* Map group tag directly to the separated WEAPONS vs EQUIPMENT vs VEHICLES vs SCENERY vs DOORS vs LIGHTS tabs */
 				if (grp == 'weap')
 					cat_id = _forge_cat_weapons;
 				else if (grp == 'eqip')
@@ -869,6 +914,8 @@ static void scan_cached_tags_manifest(char const *manifest_path)
 					cat_id = _forge_cat_vehicles;
 				else if (is_forge_door_tag(grp, tag_path))
 					cat_id = _forge_cat_barriers_devices;
+				else if (is_forge_light_beacon_emitter_tag(grp, tag_path))
+					cat_id = _forge_cat_lights;
 				else if (grp == 'scen' || grp == 'mach' || grp == 'lifi')
 					cat_id = _forge_cat_scenery;
 				else if (grp == 'bipd')
@@ -992,7 +1039,11 @@ static void scan_cache_file_into_catalog(char const *map_path, uint8_t source_ca
 		else if (grp == 'scen')
 		{
 			if (!is_excluded_scenery_or_effect_tag(tname))
-				add_catalog_entry('scen', _forge_cat_scenery, source_cache_id, tname, prefix);
+			{
+				uint8_t sc_cat = is_forge_light_beacon_emitter_tag('scen', tname)
+					? _forge_cat_lights : _forge_cat_scenery;
+				add_catalog_entry('scen', sc_cat, source_cache_id, tname, prefix);
+			}
 		}
 		else if (grp == 'actv')
 		{
@@ -1615,10 +1666,13 @@ static int forge_index_xbox_map_file_to_catalog(
 			if (_stricmp(tname, "vehicles\\wraith\\wraith") != 0)
 				cat_id = _forge_cat_vehicles;
 		}
-		else if (grp == 'scen')
-			cat_id = _forge_cat_scenery;
 		else if (is_forge_door_tag(grp, tname))
 			cat_id = _forge_cat_barriers_devices;
+		else if (is_forge_light_beacon_emitter_tag(grp, tname) &&
+				 (grp == 'scen' || is_allowed_forge_light_or_device_tag(grp, tname)))
+			cat_id = _forge_cat_lights;
+		else if (grp == 'scen')
+			cat_id = _forge_cat_scenery;
 		else if ((grp == 'mach' || grp == 'lifi') && is_allowed_forge_light_or_device_tag(grp, tname))
 			cat_id = _forge_cat_scenery;
 
@@ -2162,6 +2216,11 @@ boolean mod_sounds_read(
 	return orig_mod_sounds_read(permutation, buffer);
 }
 
+static int s_marker_meshes_loaded_flag = 0;
+static long s_monitor_bipd_handle = NONE;
+static int s_monitor_resolved = 0;
+static int s_local_monitor_drawn_this_frame = 0;
+
 void forge_runtime_on_map_unload(void)
 {
 	int i;
@@ -2172,6 +2231,10 @@ void forge_runtime_on_map_unload(void)
 	}
 	s_forge_phys_allocs.count = 0;
 	s_dyn_sound_perms.count = 0;
+	s_marker_meshes_loaded_flag = 0;
+	s_monitor_bipd_handle = NONE;
+	s_monitor_resolved = 0;
+	s_local_monitor_drawn_this_frame = 0;
 
 	if (s_dyn_tags.saved_base_instances)
 	{
@@ -4357,7 +4420,7 @@ static int forge_rip_ocetags_v5_json_to_cached_tags(
 	if (!root_group || !root_tag_path[0])
 		return 0;
 
-	cat_id = _forge_cat_scenery;
+	cat_id = is_forge_light_beacon_emitter_tag(root_group, root_tag_path) ? _forge_cat_lights : _forge_cat_scenery;
 	if (root_group == 'vehi') cat_id = _forge_cat_vehicles;
 	else if (root_group == 'weap') cat_id = _forge_cat_weapons;
 	else if (root_group == 'eqip') cat_id = _forge_cat_equipment;
@@ -5752,7 +5815,7 @@ static int forge_rip_ocetags_file_to_cached_tags(
 	if (!root_group || !root_tag_path[0])
 		return 0;
 
-	cat_id = _forge_cat_scenery;
+	cat_id = is_forge_light_beacon_emitter_tag(root_group, root_tag_path) ? _forge_cat_lights : _forge_cat_scenery;
 	if (root_group == 'vehi') cat_id = _forge_cat_vehicles;
 	else if (root_group == 'weap') cat_id = _forge_cat_weapons;
 	else if (root_group == 'eqip') cat_id = _forge_cat_equipment;
@@ -6466,10 +6529,13 @@ static int draw_native_object_model_at(
 	long model_idx;
 	struct model const *mdef;
 	struct real_matrix4x3 node_matrices[64];
-	struct render_lighting studio_lighting;
+	static struct render_lighting studio_lighting;
 	struct render_lighting const *use_lighting;
-	union real_rgb_color change_colors[4];
-	real function_values[4];
+	static union real_rgb_color change_colors_mon[4];
+	static union real_rgb_color change_colors_std[4];
+	static real function_values[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	union real_rgb_color *change_colors = is_monitor ? change_colors_mon : change_colors_std;
+	union real_point3d draw_centroid = *pos;
 	int node_count, n;
 
 	if (obj_def_idx == NONE)
@@ -6518,6 +6584,7 @@ static int draw_native_object_model_at(
 		union real_point3d mpos = *pos;
 		struct real_matrix4x3 scale_pos_mat;
 		mpos.z += 0.55f;
+		draw_centroid = mpos;
 		model_get_node_matrices(mdef, node_matrices, global_origin3d, forward, up);
 		matrix4x3_from_point_and_vectors(&scale_pos_mat, &mpos, global_forward3d, global_up3d);
 		scale_pos_mat.scale = 1.35f;
@@ -6587,10 +6654,10 @@ static int draw_native_object_model_at(
 		change_colors,
 		function_values,
 		use_lighting,
-		pos,
+		&draw_centroid,
 		radius,
 		NULL,
-		unique_id,
+		(is_monitor || is_preview) ? NONE : unique_id,
 		0,
 		is_preview ? (flags | (1u << 3)) /* _render_model_first_person_bit */ : flags);
 	return 1;
@@ -6758,9 +6825,10 @@ static void ensure_objective_marker_meshes_loaded(void)
 	};
 	int k;
 
-	if (s_marker_meshes.loaded)
+	if (s_marker_meshes.loaded && s_marker_meshes_loaded_flag)
 		return;
 	s_marker_meshes.loaded = 1;
+	s_marker_meshes_loaded_flag = 1;
 
 	for (k = 0; k < NUMBER_OF_MARKER_MESH_KINDS; k++)
 	{
@@ -6794,8 +6862,8 @@ static void draw_translucent_marker_hw_parts(
 	int is_preview)
 {
 	struct rasterizer_model_begin_parameters model_parameters;
-	union real_rgb_color change_colors[4];
-	real function_values[4];
+	static union real_rgb_color change_colors[4];
+	static real function_values[4];
 	struct real_matrix4x3 node_matrix;
 	long z_shdr_idx, col_shdr_idx;
 	struct shader *z_shdr_def;
@@ -7301,14 +7369,19 @@ void forge_render_world_3d_overlays(void const *lighting_ptr)
 {
 	if (!g_forge_session_enabled || !g_forge.initialized)
 		return;
+	if (g_forge.mode == _forge_mode_3d_monitor && g_forge.third_person_view && !s_local_monitor_drawn_this_frame)
+	{
+		long local_unit = player_control_get_unit_index(0);
+		if (local_unit != NONE)
+			forge_monitor_render_player_unit(local_unit, lighting_ptr, 0);
+	}
+	s_local_monitor_drawn_this_frame = 0;
 	render_world_objective_and_spawn_markers();
 	render_spawn_palette_3d_preview(NONE, lighting_ptr);
 }
 
 int forge_monitor_render_player_unit(long object_index, void const *lighting_ptr, unsigned long flags)
 {
-	static long s_monitor_bipd_handle = NONE;
-	static int s_monitor_resolved = 0;
 	struct unit_datum *unit;
 
 	if (!g_forge_session_enabled || object_index == NONE)
@@ -7334,14 +7407,50 @@ int forge_monitor_render_player_unit(long object_index, void const *lighting_ptr
 	if (s_monitor_bipd_handle == NONE)
 		return 0;
 
+	if (object_index == player_control_get_unit_index(0))
 	{
-		union real_point3d pos = unit->object.position;
-		float t = (float)(system_milliseconds() % 4000u) * (6.2831853f / 4000.0f);
-		pos.z += 0.06f * (t < 3.1415926f ? (t / 3.1415926f - 0.5f) : (1.5f - t / 3.1415926f));
+		union real_point3d pos;
+		union real_vector3d fwd, up;
+		float cy, sy, cp, sp;
+
+		if (!g_forge.third_person_view)
+			return 1;
+		s_local_monitor_drawn_this_frame = 1;
+
+		/* Place local Monitor at exact live camera anchor (draw_native_object_model_at adds +0.55f to Z) */
+		pos.x = g_forge.cam_x;
+		pos.y = g_forge.cam_y;
+		pos.z = g_forge.cam_z - 0.55f;
+
+		cy = (float)cosine(g_forge.cam_yaw);
+		sy = (float)sine(g_forge.cam_yaw);
+		cp = (float)cosine(g_forge.cam_pitch);
+		sp = (float)sine(g_forge.cam_pitch);
+		fwd.i = cy * cp;
+		fwd.j = sy * cp;
+		fwd.k = sp;
+		up.i = -cy * sp;
+		up.j = -sy * sp;
+		up.k = cp;
 
 		return draw_native_object_model_at(
 			s_monitor_bipd_handle,
-			object_index,
+			NONE,
+			lighting_ptr,
+			&pos,
+			&fwd,
+			&up,
+			1,
+			0,
+			flags);
+	}
+
+	{
+		union real_point3d pos = unit->object.position;
+
+		return draw_native_object_model_at(
+			s_monitor_bipd_handle,
+			NONE,
 			lighting_ptr,
 			&pos,
 			&unit->object.forward,
