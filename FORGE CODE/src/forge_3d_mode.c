@@ -3488,6 +3488,16 @@ void forge_apply_host_player_monitor_state(
 			struct player_datum *pl = player_get(p_idx);
 			if (pl && pl->unit_index != NONE)
 			{
+				struct unit_datum *u_chk = (struct unit_datum *)object_try_and_get_and_verify_type(pl->unit_index, _object_mask_unit);
+				if (is_monitor && u_chk && (u_chk->object.parent_object_index != NONE || u_chk->unit.parent_seat_index != NONE))
+				{
+					/* A player seated inside a vehicle cannot switch into Monitor Mode */
+					g_forge.player_is_monitor[player_abs_idx] = 0;
+					g_forge.player_has_monitor_pos[player_abs_idx] = 0;
+					g_forge.player_has_render_pos[player_abs_idx] = 0;
+					forge_hide_spartan_linked_attachments_and_children(pl->unit_index, 0);
+					return;
+				}
 				forge_hide_spartan_linked_attachments_and_children(pl->unit_index, is_monitor ? 1 : 0);
 				if (game_connection() == _game_connection_network_server &&
 					player_abs_idx != forge_get_local_player_abs_index())
@@ -4121,9 +4131,15 @@ void forge_3d_update(float dt)
 			}
 			else
 			{
-				if (unit_idx != NONE)
+				struct unit_datum *u = (unit_idx != NONE)
+					? (struct unit_datum *)object_try_and_get_and_verify_type(unit_idx, _object_mask_unit)
+					: NULL;
+				if (u && (u->object.parent_object_index != NONE || u->unit.parent_seat_index != NONE))
 				{
-					struct unit_datum *u = (struct unit_datum *)object_try_and_get_and_verify_type(unit_idx, _object_mask_unit);
+					forge_set_status("Exit vehicle before entering Monitor Mode");
+				}
+				else
+				{
 					if (u)
 					{
 						if (scenario_leaf_index_from_point(&u->object.position) != NONE)
@@ -4138,23 +4154,23 @@ void forge_3d_update(float dt)
 						g_forge.cam_pitch = (float)asin((double)u->unit.aiming_vector.k);
 						forge_hide_spartan_linked_attachments_and_children(unit_idx, 1);
 					}
+					g_forge.mode = _forge_mode_3d_monitor;
+					if (local_p_abs >= 0 && local_p_abs < 128)
+					{
+						g_forge.player_is_monitor[local_p_abs] = 1;
+						g_forge.player_has_monitor_pos[local_p_abs] = 1;
+						g_forge.player_monitor_pos[local_p_abs][0] = g_forge.cam_x;
+						g_forge.player_monitor_pos[local_p_abs][1] = g_forge.cam_y;
+						g_forge.player_monitor_pos[local_p_abs][2] = g_forge.cam_z;
+						g_forge.player_monitor_yaw[local_p_abs] = g_forge.cam_yaw;
+						g_forge.player_monitor_pitch[local_p_abs] = g_forge.cam_pitch;
+					}
+					forge_network_send_monitor_mode(1, g_forge.cam_x, g_forge.cam_y, g_forge.cam_z, g_forge.cam_yaw, g_forge.cam_pitch);
+					forge_set_status("Forge Mode   %s Objects   %s View   %s Save",
+						forge_action_prompt(FORGE_BIND_PALETTE),
+						forge_action_prompt(FORGE_BIND_THIRD_PERSON),
+						forge_action_prompt(FORGE_BIND_QUICK_SAVE));
 				}
-				g_forge.mode = _forge_mode_3d_monitor;
-				if (local_p_abs >= 0 && local_p_abs < 128)
-				{
-					g_forge.player_is_monitor[local_p_abs] = 1;
-					g_forge.player_has_monitor_pos[local_p_abs] = 1;
-					g_forge.player_monitor_pos[local_p_abs][0] = g_forge.cam_x;
-					g_forge.player_monitor_pos[local_p_abs][1] = g_forge.cam_y;
-					g_forge.player_monitor_pos[local_p_abs][2] = g_forge.cam_z;
-					g_forge.player_monitor_yaw[local_p_abs] = g_forge.cam_yaw;
-					g_forge.player_monitor_pitch[local_p_abs] = g_forge.cam_pitch;
-				}
-				forge_network_send_monitor_mode(1, g_forge.cam_x, g_forge.cam_y, g_forge.cam_z, g_forge.cam_yaw, g_forge.cam_pitch);
-				forge_set_status("Forge Mode   %s Objects   %s View   %s Save",
-					forge_action_prompt(FORGE_BIND_PALETTE),
-					forge_action_prompt(FORGE_BIND_THIRD_PERSON),
-					forge_action_prompt(FORGE_BIND_QUICK_SAVE));
 			}
 		}
 		/* Point 1: Only allow F2 / Controller B to toggle Forge Menu when the player is in Forge Mode (_forge_mode_3d_monitor)! */
