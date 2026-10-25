@@ -1,8 +1,23 @@
-# Halo OpenCE Forge v1.1.0 (Standalone Addon)
+# Halo OpenCE Forge v1.1.1 (Standalone Addon)
 
 A standalone **Halo 3-style 3D In-Game Forge Editor & 2D Blueprint Mode** built on top of [Halo: Open Community Edition (OpenCE)](https://github.com/d00tbeep/open-ce).
 
 This repository is structured as a **non-destructive drag-and-drop package**: you can copy its files directly into your existing Halo OpenCE directory without overwriting `halo.exe`, `SDL3.dll`, or any of your base game files.
+
+---
+
+## What's New in v1.1.1 (Multiplayer Polish & Map Export Fix)
+
+- **Smooth Remote Monitor Interpolation (`!FT:` at 20 Hz + Frame-Rate Independent Smoothing)**:
+  - Remote Monitors now broadcast 3D position and aiming at 20 Hz while moving/rotating and interpolate smoothly on every rendered frame (`player_monitor_render_pos` / `yaw` / `pitch`), eliminating on-the-spot jitter caused by gravity/prediction fighting on the underlying Spartan unit.
+- **Automatic Vehicle Passenger Ejection on Forge Grab**:
+  - Grabbing any occupied vehicle in Forge Mode (`Left-Click`) immediately ejects all seated drivers, gunners, and passengers on both Host and Clients (`forge_eject_all_passengers_from_vehicle`) before lifting the vehicle.
+- **Imported Vehicle Physics & Immediate Client Driving Sync**:
+  - Added held-state tracking (`is_held`) to `!FH:` and `!FM:` packets so vehicles freeze collision/physics while held (`is_held = 1`) and immediately wake (`_object_at_rest_bit = FALSE`, `object_set_automatic_deactivation(FALSE)`, `object_activate`) the moment they are placed (`is_held = 0`).
+  - Fixed Client-spawned imported vehicle instance linking (`forge_client_handle_host_spawn`) and child turret weapon (`unit->unit.weapon_object_indices[0]`) tag definition mapping so both Host and Clients can immediately enter and drive imported vehicles with full physics.
+- **Map Save / Bake Base BSP Resolution Fix (`Sidewinder` & All 19 MP Maps)**:
+  - Fixed `forge_export_scenario_map` so saving a map when the active session loaded an Xbox v5 / PC v7 `.map` from `maps/<map>.map` always resolves the matching `<map>.map` Custom Edition v609 BSP base cache from `OpenCE Forge/forge_maps/<map>.map` (with transparent `zlib` decompression in `forge_source_map_open`) rather than falling back to `bloodgulch.map`.
+- **Network Protocol Version**: Updated to `0x4628` (`v1.1.1`).
 
 ---
 

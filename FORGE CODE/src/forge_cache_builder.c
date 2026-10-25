@@ -480,13 +480,13 @@ static int forge_source_map_open(char const *path, struct forge_source_map *map)
 	map->map_name[31] = 0;
 	map->scenario_type = read_s16(hdr_peek + 0x60);
 
-	/* Transparently handle zlib-compressed Xbox v5 maps (or load from xbox_cache if already decompressed) */
-	if (map->version == CACHE_VERSION_XBOX &&
+	/* Transparently handle zlib-compressed Xbox v5 maps (or compressed CE v609 base maps in OpenCE Forge/forge_maps/) */
+	if ((map->version == CACHE_VERSION_XBOX || map->version == CACHE_VERSION_CE) &&
 		(uint64_t)map->tag_data_offset + (uint64_t)map->tag_data_size > (uint64_t)sz)
 	{
 		uint32_t decomp_len = read_u32(hdr_peek + 0x08);
 		char cache_cand[512];
-		FILE *cf;
+		FILE *cf = NULL;
 
 		if (decomp_len < map->tag_data_offset + map->tag_data_size)
 			decomp_len = map->tag_data_offset + map->tag_data_size;
@@ -496,29 +496,32 @@ static int forge_source_map_open(char const *path, struct forge_source_map *map)
 			return 0;
 		}
 
-		snprintf(cache_cand, sizeof(cache_cand), "OpenCE Forge/cached_tags/xbox_cache/%s", map->filename);
-		cf = fopen(cache_cand, "rb");
-		if (cf)
+		if (map->version == CACHE_VERSION_XBOX)
 		{
-			long csz = 0;
-			if (fseek(cf, 0, SEEK_END) == 0 && (csz = ftell(cf)) >= (long)(map->tag_data_offset + map->tag_data_size))
+			snprintf(cache_cand, sizeof(cache_cand), "OpenCE Forge/cached_tags/xbox_cache/%s", map->filename);
+			cf = fopen(cache_cand, "rb");
+			if (cf)
 			{
-				map->file_size = (uint32_t)csz;
-				map->data = (uint8_t *)malloc(map->file_size);
-				if (map->data)
+				long csz = 0;
+				if (fseek(cf, 0, SEEK_END) == 0 && (csz = ftell(cf)) >= (long)(map->tag_data_offset + map->tag_data_size))
 				{
-					fseek(cf, 0, SEEK_SET);
-					if (fread(map->data, 1, map->file_size, cf) == map->file_size)
+					map->file_size = (uint32_t)csz;
+					map->data = (uint8_t *)malloc(map->file_size);
+					if (map->data)
 					{
-						fclose(cf);
-						fclose(f);
-						goto parse_tag_header;
+						fseek(cf, 0, SEEK_SET);
+						if (fread(map->data, 1, map->file_size, cf) == map->file_size)
+						{
+							fclose(cf);
+							fclose(f);
+							goto parse_tag_header;
+						}
+						free(map->data);
+						map->data = NULL;
 					}
-					free(map->data);
-					map->data = NULL;
 				}
+				fclose(cf);
 			}
-			fclose(cf);
 		}
 
 		{
@@ -559,15 +562,18 @@ static int forge_source_map_open(char const *path, struct forge_source_map *map)
 			free(comp_buf);
 			map->file_size = 0x800u + (uint32_t)dst_len;
 
-			/* Cache the decompressed Xbox map to OpenCE Forge/cached_tags/xbox_cache/ for instant future opens */
-			FORGE_MKDIR("OpenCE Forge");
-			FORGE_MKDIR("OpenCE Forge/cached_tags");
-			FORGE_MKDIR("OpenCE Forge/cached_tags/xbox_cache");
-			cf = fopen(cache_cand, "wb");
-			if (cf)
+			if (map->version == CACHE_VERSION_XBOX)
 			{
-				fwrite(map->data, 1, map->file_size, cf);
-				fclose(cf);
+				/* Cache the decompressed Xbox map to OpenCE Forge/cached_tags/xbox_cache/ for instant future opens */
+				FORGE_MKDIR("OpenCE Forge");
+				FORGE_MKDIR("OpenCE Forge/cached_tags");
+				FORGE_MKDIR("OpenCE Forge/cached_tags/xbox_cache");
+				cf = fopen(cache_cand, "wb");
+				if (cf)
+				{
+					fwrite(map->data, 1, map->file_size, cf);
+					fclose(cf);
+				}
 			}
 		}
 	}
@@ -7193,17 +7199,36 @@ int forge_export_scenario_map(
 #undef mkdir
 	FORGE_MKDIR("custom_maps");
 
-	/* Ensure we open a Custom Edition (v609) base map container so custom_maps/ always receives a valid v609 cache */
+	/* Ensure we open a Custom Edition (v609) base map container matching the current map (never substituting a different map's BSP!) */
 	if (!forge_source_map_open(base_map_path, &base_map) || base_map.version != CACHE_VERSION_CE)
 	{
+		char want_file[128];
+		char cand_path[512];
+		forge_extract_basename(base_map_path, want_file, sizeof(want_file));
 		if (base_map.data)
 			forge_source_map_close(&base_map);
-		if (!forge_source_map_open("OpenCE Forge/forge_maps/bloodgulch.map", &base_map))
+		if (!want_file[0])
+			snprintf(want_file, sizeof(want_file), "bloodgulch.map");
+
+		snprintf(cand_path, sizeof(cand_path), "OpenCE Forge/forge_maps/%s", want_file);
+		if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
 		{
-			if (!forge_source_map_open("../FORGE CODE/GAME MAPS/CUSTOM EDITION DEFAULT MAPS/bloodgulch.map", &base_map))
+			if (base_map.data) forge_source_map_close(&base_map);
+			snprintf(cand_path, sizeof(cand_path), "../FORGE CODE/GAME MAPS/CUSTOM EDITION DEFAULT MAPS/%s", want_file);
+			if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
 			{
-				if (!forge_source_map_open("FORGE CODE/GAME MAPS/CUSTOM EDITION DEFAULT MAPS/bloodgulch.map", &base_map))
-					return 0;
+				if (base_map.data) forge_source_map_close(&base_map);
+				snprintf(cand_path, sizeof(cand_path), "FORGE CODE/GAME MAPS/CUSTOM EDITION DEFAULT MAPS/%s", want_file);
+				if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
+				{
+					if (base_map.data) forge_source_map_close(&base_map);
+					snprintf(cand_path, sizeof(cand_path), "custom_maps/%s", want_file);
+					if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
+					{
+						if (base_map.data) forge_source_map_close(&base_map);
+						return 0;
+					}
+				}
 			}
 		}
 	}

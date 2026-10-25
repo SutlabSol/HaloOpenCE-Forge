@@ -48,7 +48,7 @@ from tools.windows_build import (
 FORGE_DIR = ROOT_DIR / "FORGE CODE"
 FORGE_BUILD_DIR = FORGE_DIR / "build"
 OPENCE_BUILD_DIR = ROOT_DIR / "OpenCE Build"
-FORGE_NET_VERSION = "0x4627"  # ('F' << 8) | 39
+FORGE_NET_VERSION = "0x4628"  # ('F' << 8) | 40
 
 
 def find_llvm_tool(name: str) -> str:
@@ -1479,14 +1479,22 @@ def package_opence_build_folder(haloce_forge_exe: Path) -> None:
         if lb.is_file():
             lb.unlink()
 
-    # Ensure all clean Custom Edition default MP maps are in OpenCE Forge/forge_maps/ as base scenario fallbacks
+    # Ensure all clean Custom Edition default MP maps are in OpenCE Forge/forge_maps/ as zlib-compressed v609 base scenario fallbacks
     if ce_default_src.is_dir():
         for mp in sorted(ce_default_src.glob("*.map")):
             if mp.name.lower() in ("bitmaps.map", "sounds.map", "loc.map", "ui.map"):
                 continue
             dst_mp = forge_maps_dir / mp.name
-            if not dst_mp.is_file():
-                shutil.copy2(mp, dst_mp)
+            raw_mp = mp.read_bytes()
+            if len(raw_mp) > 0x800:
+                need_write = True
+                if dst_mp.is_file() and dst_mp.stat().st_size < len(raw_mp):
+                    hdr_check = dst_mp.read_bytes()[:0x800]
+                    if hdr_check == raw_mp[:0x800]:
+                        need_write = False
+                if need_write:
+                    comp_payload = zlib.compress(raw_mp[0x800:], 6)
+                    dst_mp.write_bytes(raw_mp[:0x800] + comp_payload)
 
     generate_forge_menus(forge_addon_dir)
     generate_customizable_forge_ui_assets(forge_addon_dir)

@@ -18,6 +18,7 @@
 #include "game/players.h"
 #include "objects/objects.h"
 #include "units/units.h"
+#include "units/unit_definitions.h"
 #include "items/items.h"
 #include "scenario/scenario_definitions.h"
 #include "tag_files/tag_groups.h"
@@ -67,14 +68,21 @@ struct forge_distributed_object_change
 
 static unsigned long g_last_transform_send_ms = 0;
 static unsigned long g_last_monitor_send_ms = 0;
+static float g_last_monitor_sent_x = 0.0f;
+static float g_last_monitor_sent_y = 0.0f;
+static float g_last_monitor_sent_z = 0.0f;
+static float g_last_monitor_sent_yaw = 0.0f;
+static float g_last_monitor_sent_pitch = 0.0f;
 static int g_client_requested_full_sync = 0;
 static unsigned long g_client_join_ms = 0;
 
 /* Maps absolute object index -> resolved local tag definition_index & Forge live_idx */
 static long g_net_obj_def_index[FORGE_MAX_TRACKED_NET_OBJECTS];
 static int32_t g_net_obj_live_index[FORGE_MAX_TRACKED_NET_OBJECTS];
+static uint8_t g_net_obj_is_held[FORGE_MAX_TRACKED_NET_OBJECTS];
 static uint8_t g_net_obj_has_deferred_create[FORGE_MAX_TRACKED_NET_OBJECTS];
 static struct forge_distributed_object_change g_net_obj_deferred_create[FORGE_MAX_TRACKED_NET_OBJECTS];
+static uint8_t g_suppressed_change_slots[256];
 
 /* Host per-machine incremental full-sync cursor (-1 = idle, >= 0 = next live_idx to send) */
 static int g_host_machine_known[FORGE_MAX_CLIENT_MACHINES];
@@ -161,6 +169,11 @@ void forge_network_reset_session(void)
 	int i;
 	g_last_transform_send_ms = 0;
 	g_last_monitor_send_ms = 0;
+	g_last_monitor_sent_x = 0.0f;
+	g_last_monitor_sent_y = 0.0f;
+	g_last_monitor_sent_z = 0.0f;
+	g_last_monitor_sent_yaw = 0.0f;
+	g_last_monitor_sent_pitch = 0.0f;
 	g_client_requested_full_sync = 0;
 	g_client_join_ms = system_milliseconds();
 
@@ -169,11 +182,16 @@ void forge_network_reset_session(void)
 	memset(g_forge.player_monitor_pos, 0, sizeof(g_forge.player_monitor_pos));
 	memset(g_forge.player_monitor_yaw, 0, sizeof(g_forge.player_monitor_yaw));
 	memset(g_forge.player_monitor_pitch, 0, sizeof(g_forge.player_monitor_pitch));
+	memset(g_forge.player_has_render_pos, 0, sizeof(g_forge.player_has_render_pos));
+	memset(g_forge.player_monitor_render_pos, 0, sizeof(g_forge.player_monitor_render_pos));
+	memset(g_forge.player_monitor_render_yaw, 0, sizeof(g_forge.player_monitor_render_yaw));
+	memset(g_forge.player_monitor_render_pitch, 0, sizeof(g_forge.player_monitor_render_pitch));
 
 	for (i = 0; i < FORGE_MAX_TRACKED_NET_OBJECTS; i++)
 	{
 		g_net_obj_def_index[i] = NONE;
 		g_net_obj_live_index[i] = -1;
+		g_net_obj_is_held[i] = 0;
 		g_net_obj_has_deferred_create[i] = 0;
 	}
 	for (i = 0; i < FORGE_MAX_CLIENT_MACHINES; i++)
@@ -196,10 +214,30 @@ static void forge_format_host_spawn_packet(
 	int16_t team_designator)
 {
 	uint32_t hash = forge_catalog_entry_hash(group_tag, tag_path);
-	unsigned int obj_enc = (obj_idx != NONE) ? (unsigned int)(DATUM_INDEX_TO_ABSOLUTE_INDEX(obj_idx) + 1) : 0u;
+	unsigned int obj_enc = 0u;
 	int yaw_cr = (int)(yaw * 100.0f);
 	int pitch_cr = (int)(pitch * 100.0f);
 	int roll_cr = (int)(roll * 100.0f);
+
+	if (obj_idx != NONE)
+	{
+		unsigned int base_enc = (unsigned int)((DATUM_INDEX_TO_ABSOLUTE_INDEX(obj_idx) + 1) & 0xFFFu);
+		unsigned int weap0_enc = 0u;
+		struct object_datum *obj = object_get(obj_idx);
+		if (obj && TEST_FLAG(_object_mask_unit, obj->object.type))
+		{
+			struct unit_datum *unit = (struct unit_datum *)obj;
+			if (unit->unit.weapon_object_indices[0] != NONE)
+			{
+				weap0_enc = (unsigned int)((DATUM_INDEX_TO_ABSOLUTE_INDEX(unit->unit.weapon_object_indices[0]) + 1) & 0xFFFu);
+			}
+		}
+		obj_enc = base_enc | (weap0_enc << 12);
+	}
+	if (live_idx >= 0 && g_forge.grabbed_live_index == live_idx)
+	{
+		obj_enc |= (1u << 24);
+	}
 
 	snprintf(
 		out_buf,
@@ -228,6 +266,11 @@ void forge_network_send_monitor_mode(int is_monitor, float x, float y, float z, 
 		local_p_abs = 0;
 
 	g_last_monitor_send_ms = system_milliseconds();
+	g_last_monitor_sent_x = x;
+	g_last_monitor_sent_y = y;
+	g_last_monitor_sent_z = z;
+	g_last_monitor_sent_yaw = yaw;
+	g_last_monitor_sent_pitch = pitch;
 
 	snprintf(
 		msg,
@@ -257,10 +300,21 @@ void forge_network_sync_tick(void)
 
 	now = system_milliseconds();
 
-	/* Periodically broadcast local Monitor flight position/aiming (at ~7 Hz) so other players see smooth 3D Monitor flight */
-	if (g_forge.mode == _forge_mode_3d_monitor && (now - g_last_monitor_send_ms >= 140))
+	/* Broadcast local Monitor flight position/aiming at 20 Hz when moving/aiming, or 2.5 Hz when stationary */
+	if (g_forge.mode == _forge_mode_3d_monitor)
 	{
-		forge_network_send_monitor_mode(1, g_forge.cam_x, g_forge.cam_y, g_forge.cam_z, g_forge.cam_yaw, g_forge.cam_pitch);
+		float dx = g_forge.cam_x - g_last_monitor_sent_x;
+		float dy = g_forge.cam_y - g_last_monitor_sent_y;
+		float dz = g_forge.cam_z - g_last_monitor_sent_z;
+		float dyaw = g_forge.cam_yaw - g_last_monitor_sent_yaw;
+		float dpitch = g_forge.cam_pitch - g_last_monitor_sent_pitch;
+		int moved = (dx * dx + dy * dy + dz * dz > 0.0004f) ||
+					(dyaw * dyaw + dpitch * dpitch > 0.0001f);
+		unsigned long min_interval = moved ? 50u : 400u;
+		if (now - g_last_monitor_send_ms >= min_interval)
+		{
+			forge_network_send_monitor_mode(1, g_forge.cam_x, g_forge.cam_y, g_forge.cam_z, g_forge.cam_yaw, g_forge.cam_pitch);
+		}
 	}
 
 	if (game_connection() == _game_connection_network_client)
@@ -370,16 +424,18 @@ void forge_network_sync_tick(void)
 				else if (inst->edit_entry_index >= 0)
 				{
 					int obj_abs = (inst->object_index != NONE) ? (int)DATUM_INDEX_TO_ABSOLUTE_INDEX(inst->object_index) : -1;
+					int is_held = (g_forge.grabbed_live_index == idx) ? 1 : 0;
 					snprintf(
 						msg,
 						sizeof(msg),
-						"!FM:%d:%d:%.2f:%.2f:%.2f:%d:%d:%d",
+						"!FM:%d:%d:%.2f:%.2f:%.2f:%d:%d:%d:%d",
 						(int)idx,
 						obj_abs,
 						inst->x, inst->y, inst->z,
 						(int)(inst->yaw * 100.0f),
 						(int)(inst->pitch * 100.0f),
-						(int)(inst->roll * 100.0f));
+						(int)(inst->roll * 100.0f),
+						is_held);
 					forge_send_packet_to_machine(m, msg);
 					packets_sent++;
 				}
@@ -478,6 +534,7 @@ void forge_network_send_transform_ext(
 	long obj_idx,
 	float x, float y, float z,
 	float yaw, float pitch, float roll,
+	int is_held,
 	int immediate)
 {
 	unsigned long now;
@@ -493,16 +550,34 @@ void forge_network_send_transform_ext(
 	g_last_transform_send_ms = now;
 
 	obj_abs = (obj_idx != NONE) ? (int)DATUM_INDEX_TO_ABSOLUTE_INDEX(obj_idx) : -1;
+	if (obj_abs < 0 && live_idx >= 0)
+	{
+		int k;
+		for (k = 0; k < FORGE_MAX_TRACKED_NET_OBJECTS; k++)
+		{
+			if (g_net_obj_live_index[k] == live_idx)
+			{
+				obj_abs = k;
+				break;
+			}
+		}
+	}
+	if (obj_abs >= 0 && obj_abs < FORGE_MAX_TRACKED_NET_OBJECTS)
+	{
+		g_net_obj_is_held[obj_abs] = is_held ? 1 : 0;
+	}
+
 	snprintf(
 		msg,
 		sizeof(msg),
-		"!FM:%d:%d:%.2f:%.2f:%.2f:%d:%d:%d",
+		"!FM:%d:%d:%.2f:%.2f:%.2f:%d:%d:%d:%d",
 		(int)live_idx,
 		obj_abs,
 		x, y, z,
 		(int)(yaw * 100.0f),
 		(int)(pitch * 100.0f),
-		(int)(roll * 100.0f));
+		(int)(roll * 100.0f),
+		is_held ? 1 : 0);
 
 	if (game_connection() == _game_connection_network_client)
 	{
@@ -520,9 +595,10 @@ void forge_network_send_transform(
 	float yaw, float pitch, float roll)
 {
 	long obj_idx = NONE;
+	int is_held = (live_idx >= 0 && g_forge.grabbed_live_index == live_idx) ? 1 : 0;
 	if (live_idx >= 0 && live_idx < g_forge.live_instance_count)
 		obj_idx = g_forge.live_instances[live_idx].object_index;
-	forge_network_send_transform_ext(live_idx, obj_idx, x, y, z, yaw, pitch, roll, 0);
+	forge_network_send_transform_ext(live_idx, obj_idx, x, y, z, yaw, pitch, roll, is_held, 0);
 }
 
 void forge_network_send_delete_ext(int32_t live_idx, long obj_idx)
@@ -574,23 +650,76 @@ static long forge_find_live_object_by_abs_index(int obj_abs)
 
 static int32_t forge_resolve_target_live_idx(int live_idx, int obj_abs)
 {
-	if (live_idx >= 0 && live_idx < g_forge.live_instance_count && g_forge.live_instances[live_idx].active)
-		return live_idx;
+	if (obj_abs >= 0 && obj_abs < FORGE_MAX_TRACKED_NET_OBJECTS)
+	{
+		int32_t mapped_idx = g_net_obj_live_index[obj_abs];
+		if (mapped_idx >= 0 && mapped_idx < g_forge.live_instance_count && g_forge.live_instances[mapped_idx].active)
+			return mapped_idx;
+	}
 	if (obj_abs >= 0)
 	{
 		long obj_idx = forge_find_live_object_by_abs_index(obj_abs);
 		if (obj_idx != NONE)
-			return forge_3d_adopt_or_find_object_instance(obj_idx);
+		{
+			int32_t adopted_idx = forge_3d_adopt_or_find_object_instance(obj_idx);
+			if (adopted_idx >= 0)
+			{
+				if (obj_abs < FORGE_MAX_TRACKED_NET_OBJECTS)
+					g_net_obj_live_index[obj_abs] = adopted_idx;
+				return adopted_idx;
+			}
+		}
 	}
+	if (live_idx >= 0 && live_idx < g_forge.live_instance_count && g_forge.live_instances[live_idx].active)
+		return live_idx;
 	if (live_idx >= 0 && live_idx < g_forge.live_instance_count)
 		return live_idx;
 	return -1;
+}
+
+static void forge_client_configure_linked_object(int32_t live_idx, long obj_idx, int is_held)
+{
+	struct object_datum *obj;
+
+	if (obj_idx == NONE)
+		return;
+
+	object_set_automatic_deactivation(obj_idx, FALSE);
+	object_activate(obj_idx);
+
+	obj = object_get(obj_idx);
+	if (obj)
+	{
+		SET_FLAG(obj->object.flags, _object_no_collisions_bit, is_held ? TRUE : FALSE);
+		if (TEST_FLAG(_object_mask_unit, obj->object.type))
+		{
+			if (is_held)
+				SET_FLAG(obj->object.flags, _object_at_rest_bit, TRUE);
+			else
+				SET_FLAG(obj->object.flags, _object_at_rest_bit, FALSE);
+			unit_set_enterable_by_player(obj_idx, TRUE);
+			unit_set_controllable(obj_idx, TRUE);
+		}
+		else if (!is_held)
+		{
+			SET_FLAG(obj->object.flags, _object_at_rest_bit, FALSE);
+		}
+	}
+
+	if (live_idx >= 0 && live_idx < g_forge.live_instance_count && g_forge.live_instances[live_idx].active)
+	{
+		g_forge.live_instances[live_idx].object_index = obj_idx;
+		if (g_forge.grabbed_live_index == live_idx)
+			g_forge.grabbed_object_index = obj_idx;
+	}
 }
 
 static void forge_client_handle_host_spawn(
 	int host_live_idx,
 	uint32_t hash,
 	int obj_abs,
+	int weap0_abs,
+	int host_is_held,
 	float x, float y, float z,
 	float yaw, float pitch, float roll,
 	int16_t team_designator)
@@ -598,7 +727,9 @@ static void forge_client_handle_host_spawn(
 	struct forge_catalog_entry const *ce = forge_find_catalog_entry_by_hash(hash);
 	uint32_t actual_grp;
 	long def_idx = NONE;
+	long weap0_def_idx = NONE;
 	int32_t match_idx = -1;
+	int matched_client_unlinked = 0;
 	int i;
 
 	if (!ce)
@@ -611,29 +742,83 @@ static void forge_client_handle_host_spawn(
 		def_idx = forge_resolve_engine_tag(ce->group_tag, ce->tag_path, &actual_grp);
 	}
 
-	if (obj_abs >= 0 && obj_abs < FORGE_MAX_TRACKED_NET_OBJECTS && def_idx != NONE)
+	if (obj_abs >= 0 && obj_abs < FORGE_MAX_TRACKED_NET_OBJECTS)
 	{
-		g_net_obj_def_index[obj_abs] = def_idx;
+		if (def_idx != NONE)
+			g_net_obj_def_index[obj_abs] = def_idx;
+		g_net_obj_is_held[obj_abs] = host_is_held ? 1 : 0;
 	}
 
-	/* Check if this Client already has this live_instance (e.g. if this Client initiated the spawn) */
-	if (host_live_idx >= 0 && host_live_idx < g_forge.live_instance_count)
+	if (weap0_abs >= 0 && weap0_abs < FORGE_MAX_TRACKED_NET_OBJECTS && def_idx != NONE && actual_grp == 'vehi')
 	{
-		struct forge_live_instance const *cand = &g_forge.live_instances[host_live_idx];
-		if (cand->active && cand->group_tag == ce->group_tag &&
-			_stricmp(cand->tag_path, ce->tag_path) == 0)
+		struct unit_definition const *udef = (struct unit_definition const *)tag_get('unit', def_idx);
+		if (udef && udef->unit.initial_weapons.count > 0 && udef->unit.initial_weapons.address)
 		{
-			match_idx = host_live_idx;
+			struct tag_reference const *iw_ref = (struct tag_reference const *)udef->unit.initial_weapons.address;
+			if (iw_ref->index != NONE)
+			{
+				weap0_def_idx = iw_ref->index;
+				g_net_obj_def_index[weap0_abs] = weap0_def_idx;
+			}
 		}
 	}
+
+	/* 1. If the Client is currently holding an unlinked instance of this exact tag, match it first */
+	if (g_forge.grabbed_live_index >= 0 && g_forge.grabbed_live_index < g_forge.live_instance_count)
+	{
+		struct forge_live_instance const *cand = &g_forge.live_instances[g_forge.grabbed_live_index];
+		if (cand->active && !cand->is_default_scenario_object && cand->object_index == NONE &&
+			cand->group_tag == ce->group_tag && _stricmp(cand->tag_path, ce->tag_path) == 0)
+		{
+			match_idx = g_forge.grabbed_live_index;
+			matched_client_unlinked = 1;
+		}
+	}
+
+	/* 2. Check if host_live_idx points to an unlinked instance of this tag */
+	if (match_idx < 0 && host_live_idx >= 0 && host_live_idx < g_forge.live_instance_count)
+	{
+		struct forge_live_instance const *cand = &g_forge.live_instances[host_live_idx];
+		if (cand->active && !cand->is_default_scenario_object && cand->object_index == NONE &&
+			cand->group_tag == ce->group_tag && _stricmp(cand->tag_path, ce->tag_path) == 0)
+		{
+			match_idx = host_live_idx;
+			matched_client_unlinked = 1;
+		}
+	}
+
+	/* 3. Scan for any unlinked Client-created instance of this tag */
 	if (match_idx < 0)
 	{
+		for (i = g_forge.live_instance_count - 1; i >= 0; i--)
+		{
+			struct forge_live_instance const *cand = &g_forge.live_instances[i];
+			if (!cand->active || cand->is_default_scenario_object || cand->object_index != NONE)
+				continue;
+			if (cand->group_tag == ce->group_tag && _stricmp(cand->tag_path, ce->tag_path) == 0)
+			{
+				match_idx = i;
+				matched_client_unlinked = 1;
+				break;
+			}
+		}
+	}
+
+	/* 4. Check if already linked to obj_abs or at the exact position */
+	if (match_idx < 0)
+	{
+		long existing_obj = forge_find_live_object_by_abs_index(obj_abs);
 		for (i = g_forge.live_instance_count - 1; i >= 0; i--)
 		{
 			struct forge_live_instance const *cand = &g_forge.live_instances[i];
 			float dx, dy, dz;
 			if (!cand->active || cand->is_default_scenario_object)
 				continue;
+			if (existing_obj != NONE && cand->object_index == existing_obj)
+			{
+				match_idx = i;
+				break;
+			}
 			if (cand->group_tag != ce->group_tag || _stricmp(cand->tag_path, ce->tag_path) != 0)
 				continue;
 			dx = cand->x - x;
@@ -662,11 +847,19 @@ static void forge_client_handle_host_spawn(
 	if (obj_abs >= 0 && obj_abs < FORGE_MAX_TRACKED_NET_OBJECTS)
 	{
 		long existing_obj;
-		if (match_idx >= 0)
-			g_net_obj_live_index[obj_abs] = match_idx;
+		int effective_held = host_is_held;
 
-		/* If _distributed_message_object_changes arrived BEFORE !FH: and failed because the external tag
-		 * was not yet resolved on the client, replay its deferred creation right now! */
+		if (match_idx >= 0)
+		{
+			g_net_obj_live_index[obj_abs] = match_idx;
+			if (matched_client_unlinked)
+			{
+				effective_held = (g_forge.grabbed_live_index == match_idx) ? 1 : 0;
+				g_net_obj_is_held[obj_abs] = (uint8_t)effective_held;
+			}
+		}
+
+		/* If _distributed_message_object_changes arrived BEFORE !FH:, replay deferred creation now! */
 		existing_obj = forge_find_live_object_by_abs_index(obj_abs);
 		if (existing_obj == NONE && g_net_obj_has_deferred_create[obj_abs] && def_idx != NONE)
 		{
@@ -677,15 +870,35 @@ static void forge_client_handle_host_spawn(
 			existing_obj = forge_find_live_object_by_abs_index(obj_abs);
 		}
 
+		if (weap0_abs >= 0 && weap0_abs < FORGE_MAX_TRACKED_NET_OBJECTS &&
+			forge_find_live_object_by_abs_index(weap0_abs) == NONE &&
+			g_net_obj_has_deferred_create[weap0_abs] && weap0_def_idx != NONE)
+		{
+			struct forge_distributed_object_change re_weap = g_net_obj_deferred_create[weap0_abs];
+			g_net_obj_has_deferred_create[weap0_abs] = 0;
+			re_weap.definition_index = weap0_def_idx;
+			orig_network_objects_handle_changes(&re_weap, 1);
+		}
+
 		if (existing_obj != NONE && match_idx >= 0 && match_idx < g_forge.live_instance_count)
 		{
-			g_forge.live_instances[match_idx].object_index = existing_obj;
-			if (g_forge.grabbed_live_index == match_idx)
-				g_forge.grabbed_object_index = existing_obj;
-			if (ce->group_tag == 'vehi')
+			forge_client_configure_linked_object(match_idx, existing_obj, effective_held);
+			if (matched_client_unlinked)
 			{
-				unit_set_enterable_by_player(existing_obj, TRUE);
-				unit_set_controllable(existing_obj, TRUE);
+				struct forge_live_instance const *inst = &g_forge.live_instances[match_idx];
+				forge_3d_move_instance_ext(
+					match_idx,
+					inst->x, inst->y, inst->z,
+					inst->yaw, inst->pitch, inst->roll,
+					effective_held,
+					0);
+				forge_network_send_transform_ext(
+					match_idx,
+					existing_obj,
+					inst->x, inst->y, inst->z,
+					inst->yaw, inst->pitch, inst->roll,
+					effective_held,
+					1);
 			}
 		}
 	}
@@ -800,21 +1013,40 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 		}
 		else if (strncmp(text, "!FM:", 4) == 0)
 		{
-			int live_idx = -1, obj_abs = -1, yaw_cr = 0, pitch_cr = 0, roll_cr = 0;
+			int live_idx = -1, obj_abs = -1, yaw_cr = 0, pitch_cr = 0, roll_cr = 0, is_held = 0;
 			float x = 0.0f, y = 0.0f, z = 0.0f;
-			if (sscanf(text + 4, "%d:%d:%f:%f:%f:%d:%d:%d", &live_idx, &obj_abs, &x, &y, &z, &yaw_cr, &pitch_cr, &roll_cr) == 8)
+			int n = sscanf(text + 4, "%d:%d:%f:%f:%f:%d:%d:%d:%d", &live_idx, &obj_abs, &x, &y, &z, &yaw_cr, &pitch_cr, &roll_cr, &is_held);
+			if (n >= 8)
 			{
 				int32_t target_idx = forge_resolve_target_live_idx(live_idx, obj_abs);
+				if (obj_abs >= 0 && obj_abs < FORGE_MAX_TRACKED_NET_OBJECTS)
+					g_net_obj_is_held[obj_abs] = (n >= 9 && is_held) ? 1 : 0;
 				if (target_idx >= 0)
 				{
-					forge_3d_move_instance(
+					char relay[64];
+					int host_obj_abs = obj_abs;
+					if (host_obj_abs < 0 && g_forge.live_instances[target_idx].object_index != NONE)
+						host_obj_abs = (int)DATUM_INDEX_TO_ABSOLUTE_INDEX(g_forge.live_instances[target_idx].object_index);
+					forge_3d_move_instance_ext(
 						target_idx,
 						x, y, z,
 						(float)yaw_cr / 100.0f,
 						(float)pitch_cr / 100.0f,
 						(float)roll_cr / 100.0f,
+						(n >= 9) ? is_held : 0,
 						0);
-					forge_broadcast_packet_to_clients(text, machine_index);
+					snprintf(
+						relay,
+						sizeof(relay),
+						"!FM:%d:%d:%.2f:%.2f:%.2f:%d:%d:%d:%d",
+						(int)target_idx,
+						host_obj_abs,
+						x, y, z,
+						yaw_cr,
+						pitch_cr,
+						roll_cr,
+						(n >= 9 && is_held) ? 1 : 0);
+					forge_broadcast_packet_to_clients(relay, machine_index);
 				}
 			}
 			return 1;
@@ -852,11 +1084,17 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 					&yaw_cr, &pitch_cr, &roll_cr,
 					&team) == 10)
 			{
-				int obj_abs = (obj_enc > 0) ? (int)(obj_enc - 1) : -1;
+				unsigned int base_enc = obj_enc & 0xFFFu;
+				unsigned int weap0_enc = (obj_enc >> 12) & 0xFFFu;
+				int host_is_held = (obj_enc & (1u << 24)) ? 1 : 0;
+				int obj_abs = (base_enc > 0) ? (int)(base_enc - 1) : -1;
+				int weap0_abs = (weap0_enc > 0) ? (int)(weap0_enc - 1) : -1;
 				forge_client_handle_host_spawn(
 					(int)live_idx_u,
 					(uint32_t)hash,
 					obj_abs,
+					weap0_abs,
+					host_is_held,
 					x, y, z,
 					(float)yaw_cr / 100.0f,
 					(float)pitch_cr / 100.0f,
@@ -867,19 +1105,23 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 		}
 		else if (strncmp(text, "!FM:", 4) == 0)
 		{
-			int live_idx = -1, obj_abs = -1, yaw_cr = 0, pitch_cr = 0, roll_cr = 0;
+			int live_idx = -1, obj_abs = -1, yaw_cr = 0, pitch_cr = 0, roll_cr = 0, is_held = 0;
 			float x = 0.0f, y = 0.0f, z = 0.0f;
-			if (sscanf(text + 4, "%d:%d:%f:%f:%f:%d:%d:%d", &live_idx, &obj_abs, &x, &y, &z, &yaw_cr, &pitch_cr, &roll_cr) == 8)
+			int n = sscanf(text + 4, "%d:%d:%f:%f:%f:%d:%d:%d:%d", &live_idx, &obj_abs, &x, &y, &z, &yaw_cr, &pitch_cr, &roll_cr, &is_held);
+			if (n >= 8)
 			{
 				int32_t target_idx = forge_resolve_target_live_idx(live_idx, obj_abs);
+				if (obj_abs >= 0 && obj_abs < FORGE_MAX_TRACKED_NET_OBJECTS)
+					g_net_obj_is_held[obj_abs] = (n >= 9 && is_held) ? 1 : 0;
 				if (target_idx >= 0 && target_idx != g_forge.grabbed_live_index)
 				{
-					forge_3d_move_instance(
+					forge_3d_move_instance_ext(
 						target_idx,
 						x, y, z,
 						(float)yaw_cr / 100.0f,
 						(float)pitch_cr / 100.0f,
 						(float)roll_cr / 100.0f,
+						(n >= 9) ? is_held : 0,
 						0);
 				}
 			}
@@ -906,8 +1148,10 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 void forge_network_pre_handle_object_changes(void const *entries, short count)
 {
 	struct forge_distributed_object_change *changes = (struct forge_distributed_object_change *)entries;
+	uint32_t base_tag_count = forge_get_base_map_tag_count();
 	short i;
 
+	memset(g_suppressed_change_slots, 0, sizeof(g_suppressed_change_slots));
 	if (!changes || count <= 0)
 		return;
 
@@ -924,6 +1168,17 @@ void forge_network_pre_handle_object_changes(void const *entries, short count)
 				{
 					changes[i].definition_index = g_net_obj_def_index[obj_abs];
 				}
+				else if (base_tag_count > 0 &&
+						 changes[i].definition_index != NONE &&
+						 (uint32_t)DATUM_INDEX_TO_ABSOLUTE_INDEX(changes[i].definition_index) >= base_tag_count)
+				{
+					/* Dynamic tag from Host not yet resolved on Client via !FH: — defer creation cleanly */
+					if (i < (short)sizeof(g_suppressed_change_slots))
+					{
+						g_suppressed_change_slots[i] = 1;
+						changes[i].change = 0xFF;
+					}
+				}
 			}
 		}
 		else if (changes[i].change == 1 /* _object_change_delete */ && changes[i].object_index != NONE)
@@ -939,7 +1194,7 @@ void forge_network_pre_handle_object_changes(void const *entries, short count)
 
 void forge_network_post_handle_object_changes(void const *entries, short count)
 {
-	struct forge_distributed_object_change const *changes = (struct forge_distributed_object_change const *)entries;
+	struct forge_distributed_object_change *changes = (struct forge_distributed_object_change *)entries;
 	short i;
 
 	if (!changes || count <= 0)
@@ -947,6 +1202,11 @@ void forge_network_post_handle_object_changes(void const *entries, short count)
 
 	for (i = 0; i < count; i++)
 	{
+		if (i < (short)sizeof(g_suppressed_change_slots) && g_suppressed_change_slots[i])
+		{
+			changes[i].change = 0;
+			continue;
+		}
 		if (changes[i].change == 0 /* _object_change_create */ && changes[i].object_index != NONE)
 		{
 			int obj_abs = (int)DATUM_INDEX_TO_ABSOLUTE_INDEX(changes[i].object_index);
@@ -956,18 +1216,11 @@ void forge_network_post_handle_object_changes(void const *entries, short count)
 				if (existing_obj != NONE)
 				{
 					int32_t live_idx = g_net_obj_live_index[obj_abs];
+					int is_held = g_net_obj_is_held[obj_abs] ? 1 : 0;
 					g_net_obj_has_deferred_create[obj_abs] = 0;
-					if (live_idx >= 0 && live_idx < g_forge.live_instance_count && g_forge.live_instances[live_idx].active)
-					{
-						g_forge.live_instances[live_idx].object_index = existing_obj;
-						if (g_forge.grabbed_live_index == live_idx)
-							g_forge.grabbed_object_index = existing_obj;
-						if (g_forge.live_instances[live_idx].group_tag == 'vehi')
-						{
-							unit_set_enterable_by_player(existing_obj, TRUE);
-							unit_set_controllable(existing_obj, TRUE);
-						}
-					}
+					if (live_idx >= 0 && g_forge.grabbed_live_index == live_idx)
+						is_held = 1;
+					forge_client_configure_linked_object(live_idx, existing_obj, is_held);
 				}
 			}
 		}

@@ -2526,6 +2526,16 @@ static long append_runtime_tag_instance(
 	return new_tag_index;
 }
 
+uint32_t forge_get_base_map_tag_count(void)
+{
+	long existing_count = 0;
+	if (s_dyn_tags.saved_base_count > 0)
+		return (uint32_t)s_dyn_tags.saved_base_count;
+	if (cache_files_tag_instances(&existing_count) && existing_count > 0)
+		return (uint32_t)existing_count;
+	return 0;
+}
+
 static int is_valid_cyborg_driver_seat_label(char const *label)
 {
 	if (!label || !label[0])
@@ -7442,46 +7452,41 @@ int forge_monitor_render_player_unit(long object_index, void const *lighting_ptr
 
 	{
 		union real_point3d pos = unit->object.position;
-		union real_vector3d fwd = unit->unit.aiming_vector;
-		union real_vector3d up;
-		float flen = square_root(fwd.i * fwd.i + fwd.j * fwd.j + fwd.k * fwd.k);
+		union real_vector3d fwd = unit->object.forward;
+		union real_vector3d up = unit->object.up;
 		int p_abs = (int)((uint32_t)unit->unit.player_index & 0xFFFFu);
 
 		if (p_abs >= 0 && p_abs < 128 && g_forge.player_has_monitor_pos[p_abs])
 		{
-			float dx = pos.x - g_forge.player_monitor_pos[p_abs][0];
-			float dy = pos.y - g_forge.player_monitor_pos[p_abs][1];
-			float dz = (pos.z + 0.55f) - g_forge.player_monitor_pos[p_abs][2];
-			if (dx * dx + dy * dy + dz * dz > 4.0f)
-			{
-				pos.x = g_forge.player_monitor_pos[p_abs][0];
-				pos.y = g_forge.player_monitor_pos[p_abs][1];
-				pos.z = g_forge.player_monitor_pos[p_abs][2] - 0.55f;
-			}
-		}
+			float rx = g_forge.player_has_render_pos[p_abs]
+				? g_forge.player_monitor_render_pos[p_abs][0]
+				: g_forge.player_monitor_pos[p_abs][0];
+			float ry = g_forge.player_has_render_pos[p_abs]
+				? g_forge.player_monitor_render_pos[p_abs][1]
+				: g_forge.player_monitor_pos[p_abs][1];
+			float rz = g_forge.player_has_render_pos[p_abs]
+				? g_forge.player_monitor_render_pos[p_abs][2]
+				: g_forge.player_monitor_pos[p_abs][2];
+			float ryaw = g_forge.player_has_render_pos[p_abs]
+				? g_forge.player_monitor_render_yaw[p_abs]
+				: g_forge.player_monitor_yaw[p_abs];
+			float rpitch = g_forge.player_has_render_pos[p_abs]
+				? g_forge.player_monitor_render_pitch[p_abs]
+				: g_forge.player_monitor_pitch[p_abs];
+			float cy = (float)cosine(ryaw);
+			float sy = (float)sine(ryaw);
+			float cp = (float)cosine(rpitch);
+			float sp = (float)sine(rpitch);
 
-		if (flen > 0.001f)
-		{
-			float hlen;
-			fwd.i /= flen;
-			fwd.j /= flen;
-			fwd.k /= flen;
-			hlen = square_root(fwd.i * fwd.i + fwd.j * fwd.j);
-			if (hlen > 0.001f)
-			{
-				up.i = -(fwd.i / hlen) * fwd.k;
-				up.j = -(fwd.j / hlen) * fwd.k;
-				up.k = hlen;
-			}
-			else
-			{
-				up = unit->object.up;
-			}
-		}
-		else
-		{
-			fwd = unit->object.forward;
-			up = unit->object.up;
+			pos.x = rx;
+			pos.y = ry;
+			pos.z = rz - 0.55f;
+			fwd.i = cy * cp;
+			fwd.j = sy * cp;
+			fwd.k = sp;
+			up.i = -cy * sp;
+			up.j = -sy * sp;
+			up.k = cp;
 		}
 
 		return draw_native_object_model_at(

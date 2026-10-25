@@ -2427,6 +2427,7 @@ int32_t forge_3d_spawn_object_at(
 					SET_FLAG(obj->object.flags, _object_outside_of_map_bit, FALSE);
 					if (group_tag == 'vehi')
 					{
+						SET_FLAG(obj->object.flags, _object_at_rest_bit, FALSE);
 						unit_set_enterable_by_player(inst->object_index, TRUE);
 						unit_set_controllable(inst->object_index, TRUE);
 					}
@@ -2517,10 +2518,34 @@ int32_t forge_3d_spawn_object_at(
 	return live_idx;
 }
 
-void forge_3d_move_instance(
+static void forge_eject_all_passengers_from_vehicle(long vehicle_index)
+{
+	struct object_iterator u_iter;
+	struct unit_datum *u;
+
+	if (vehicle_index == NONE)
+		return;
+
+	object_iterator_new(&u_iter, _object_mask_unit, 0);
+	while ((u = (struct unit_datum *)object_iterator_next(&u_iter)) != NULL)
+	{
+		long u_idx = u_iter.index;
+		if (u_idx == vehicle_index)
+			continue;
+		if (u->object.parent_object_index == vehicle_index && u->unit.parent_seat_index != NONE)
+		{
+			unit_exit_seat_end(u_idx);
+			SET_FLAG(u->object.flags, _object_at_rest_bit, FALSE);
+			object_activate(u_idx);
+		}
+	}
+}
+
+void forge_3d_move_instance_ext(
 	int32_t live_idx,
 	float x, float y, float z,
 	float yaw, float pitch, float roll,
+	int is_held,
 	int broadcast_net)
 {
 	struct forge_live_instance *inst;
@@ -2545,7 +2570,6 @@ void forge_3d_move_instance(
 		{
 			real_point3d pos;
 			real_vector3d fwd, up;
-			int is_held = (live_idx == g_forge.grabbed_live_index);
 			pos.x = x;
 			pos.y = y;
 			pos.z = z;
@@ -2559,27 +2583,51 @@ void forge_3d_move_instance(
 				if (idef)
 					idef->item.flags &= ~1UL; /* Clear _item_definition_always_maintains_z_up_bit so pitched/rolled items stay oriented */
 			}
+			if (obj->object.type == _object_type_vehicle)
+			{
+				unit_set_enterable_by_player(inst->object_index, TRUE);
+				unit_set_controllable(inst->object_index, TRUE);
+				if (is_held)
+					forge_eject_all_passengers_from_vehicle(inst->object_index);
+			}
 			SET_FLAG(obj->object.flags, _object_outside_of_map_bit, FALSE);
 			SET_FLAG(obj->object.flags, _object_no_collisions_bit, is_held ? TRUE : FALSE);
-			SET_FLAG(obj->object.flags, _object_at_rest_bit, TRUE);
-			object_set_position(inst->object_index, &pos, &fwd, &up);
-			object_set_automatic_deactivation(inst->object_index, FALSE);
-			if (is_held && (obj->object.type == _object_type_vehicle ||
-							obj->object.type == _object_type_weapon ||
-							obj->object.type == _object_type_equipment))
+			if (!is_held && obj->object.type == _object_type_vehicle)
 			{
-				object_deactivate(inst->object_index);
+				/* Placed/released vehicle: wake physics on BOTH Host and Clients so it falls to ground and is immediately drivable! */
+				SET_FLAG(obj->object.flags, _object_at_rest_bit, FALSE);
+				object_set_position(inst->object_index, &pos, &fwd, &up);
+				object_set_automatic_deactivation(inst->object_index, FALSE);
+				object_activate(inst->object_index);
+				obj->object.translational_velocity.i = 0.0f;
+				obj->object.translational_velocity.j = 0.0f;
+				obj->object.translational_velocity.k = -0.02f;
+				obj->object.angular_velocity.i = 0.0f;
+				obj->object.angular_velocity.j = 0.0f;
+				obj->object.angular_velocity.k = 0.0f;
 			}
 			else
 			{
-				object_activate(inst->object_index);
+				SET_FLAG(obj->object.flags, _object_at_rest_bit, TRUE);
+				object_set_position(inst->object_index, &pos, &fwd, &up);
+				object_set_automatic_deactivation(inst->object_index, FALSE);
+				if (is_held && (obj->object.type == _object_type_vehicle ||
+								obj->object.type == _object_type_weapon ||
+								obj->object.type == _object_type_equipment))
+				{
+					object_deactivate(inst->object_index);
+				}
+				else
+				{
+					object_activate(inst->object_index);
+				}
+				obj->object.translational_velocity.i = 0.0f;
+				obj->object.translational_velocity.j = 0.0f;
+				obj->object.translational_velocity.k = 0.0f;
+				obj->object.angular_velocity.i = 0.0f;
+				obj->object.angular_velocity.j = 0.0f;
+				obj->object.angular_velocity.k = 0.0f;
 			}
-			obj->object.translational_velocity.i = 0.0f;
-			obj->object.translational_velocity.j = 0.0f;
-			obj->object.translational_velocity.k = 0.0f;
-			obj->object.angular_velocity.i = 0.0f;
-			obj->object.angular_velocity.j = 0.0f;
-			obj->object.angular_velocity.k = 0.0f;
 		}
 		else
 		{
@@ -2624,8 +2672,18 @@ void forge_3d_move_instance(
 
 	if (broadcast_net && forge_is_multiplayer_session())
 	{
-		forge_network_send_transform_ext(live_idx, inst->object_index, x, y, z, yaw, pitch, roll, 0);
+		forge_network_send_transform_ext(live_idx, inst->object_index, x, y, z, yaw, pitch, roll, is_held ? 1 : 0, 0);
 	}
+}
+
+void forge_3d_move_instance(
+	int32_t live_idx,
+	float x, float y, float z,
+	float yaw, float pitch, float roll,
+	int broadcast_net)
+{
+	int is_held = (live_idx >= 0 && live_idx == g_forge.grabbed_live_index) ? 1 : 0;
+	forge_3d_move_instance_ext(live_idx, x, y, z, yaw, pitch, roll, is_held, broadcast_net);
 }
 
 void forge_3d_delete_instance(int32_t live_idx, int broadcast_net)
@@ -3182,24 +3240,30 @@ static void forge_cancel_or_release_held_item(void)
 		}
 		else
 		{
-			forge_3d_move_instance(
-				g_forge.grabbed_live_index,
+			int32_t restore_live = g_forge.grabbed_live_index;
+			long restore_obj = g_forge.grabbed_object_index;
+			g_forge.grabbed_live_index = -1;
+			g_forge.grabbed_object_index = NONE;
+			forge_3d_move_instance_ext(
+				restore_live,
 				g_forge.grab_orig_x,
 				g_forge.grab_orig_y,
 				g_forge.grab_orig_z,
 				g_forge.grab_orig_yaw,
 				g_forge.grab_orig_pitch,
 				g_forge.grab_orig_roll,
-				1);
+				0,
+				0);
 			forge_network_send_transform_ext(
-				g_forge.grabbed_live_index,
-				g_forge.grabbed_object_index,
+				restore_live,
+				restore_obj,
 				g_forge.grab_orig_x,
 				g_forge.grab_orig_y,
 				g_forge.grab_orig_z,
 				g_forge.grab_orig_yaw,
 				g_forge.grab_orig_pitch,
 				g_forge.grab_orig_roll,
+				0,
 				1);
 		}
 	}
@@ -3372,10 +3436,12 @@ void forge_apply_host_player_monitor_state(
 	float yaw, float pitch)
 {
 	long p_idx;
+	int was_monitor;
 
 	if (player_abs_idx < 0 || player_abs_idx >= 128)
 		return;
 
+	was_monitor = g_forge.player_is_monitor[player_abs_idx];
 	g_forge.player_is_monitor[player_abs_idx] = (uint8_t)(is_monitor ? 1 : 0);
 	g_forge.player_has_monitor_pos[player_abs_idx] = (uint8_t)(is_monitor ? 1 : 0);
 	g_forge.player_monitor_pos[player_abs_idx][0] = x;
@@ -3383,6 +3449,34 @@ void forge_apply_host_player_monitor_state(
 	g_forge.player_monitor_pos[player_abs_idx][2] = z;
 	g_forge.player_monitor_yaw[player_abs_idx] = yaw;
 	g_forge.player_monitor_pitch[player_abs_idx] = pitch;
+
+	if (!is_monitor)
+	{
+		g_forge.player_has_render_pos[player_abs_idx] = 0;
+	}
+	else if (!g_forge.player_has_render_pos[player_abs_idx] || !was_monitor)
+	{
+		g_forge.player_has_render_pos[player_abs_idx] = 1;
+		g_forge.player_monitor_render_pos[player_abs_idx][0] = x;
+		g_forge.player_monitor_render_pos[player_abs_idx][1] = y;
+		g_forge.player_monitor_render_pos[player_abs_idx][2] = z;
+		g_forge.player_monitor_render_yaw[player_abs_idx] = yaw;
+		g_forge.player_monitor_render_pitch[player_abs_idx] = pitch;
+	}
+	else
+	{
+		float dx = x - g_forge.player_monitor_render_pos[player_abs_idx][0];
+		float dy = y - g_forge.player_monitor_render_pos[player_abs_idx][1];
+		float dz = z - g_forge.player_monitor_render_pos[player_abs_idx][2];
+		if (dx * dx + dy * dy + dz * dz > 36.0f)
+		{
+			g_forge.player_monitor_render_pos[player_abs_idx][0] = x;
+			g_forge.player_monitor_render_pos[player_abs_idx][1] = y;
+			g_forge.player_monitor_render_pos[player_abs_idx][2] = z;
+			g_forge.player_monitor_render_yaw[player_abs_idx] = yaw;
+			g_forge.player_monitor_render_pitch[player_abs_idx] = pitch;
+		}
+	}
 
 	if (!player_data)
 		return;
@@ -3409,28 +3503,38 @@ void forge_apply_host_player_monitor_state(
 						if (is_monitor)
 						{
 							SET_FLAG(u->object.flags, _object_no_collisions_bit, TRUE);
+							SET_FLAG(u->object.flags, _object_at_rest_bit, TRUE);
 							SET_FLAG(u->object.damage_flags, _object_cannot_take_damage_bit, TRUE);
 							SET_FLAG(u->object.damage_flags, _object_shield_depleted_bit, FALSE);
 							u->object.body_vitality = 1.0f;
 							u->object.shield_vitality = 1.0f;
 							object_set_automatic_deactivation(pl->unit_index, FALSE);
+							if (!was_monitor)
+							{
+								if (scenario_leaf_index_from_point(&u_pos) != NONE)
+									object_set_position(pl->unit_index, &u_pos, &h_fwd, &h_up);
+								else
+								{
+									u->object.position = u_pos;
+									u->object.forward = h_fwd;
+									u->object.up = h_up;
+								}
+							}
 						}
 						else
 						{
 							SET_FLAG(u->object.flags, _object_no_collisions_bit, FALSE);
 							SET_FLAG(u->object.flags, _object_at_rest_bit, FALSE);
 							SET_FLAG(u->object.damage_flags, _object_cannot_take_damage_bit, FALSE);
+							if (scenario_leaf_index_from_point(&u_pos) != NONE)
+								object_set_position(pl->unit_index, &u_pos, &h_fwd, &h_up);
+							else
+							{
+								u->object.position = u_pos;
+								u->object.forward = h_fwd;
+								u->object.up = h_up;
+							}
 							object_activate(pl->unit_index);
-						}
-						if (scenario_leaf_index_from_point(&u_pos) != NONE)
-						{
-							object_set_position(pl->unit_index, &u_pos, &h_fwd, &h_up);
-						}
-						else
-						{
-							u->object.position = u_pos;
-							u->object.forward = h_fwd;
-							u->object.up = h_up;
 						}
 						u->unit.desired_facing_vector = is_monitor ? m_fwd : h_fwd;
 						u->unit.desired_aiming_vector = is_monitor ? m_fwd : h_fwd;
@@ -3792,6 +3896,7 @@ void forge_3d_update(float dt)
 				euler_to_forward_up(g_forge.cam_yaw, g_forge.cam_pitch, g_forge.cam_roll, &m_fwd, &m_up);
 				euler_to_forward_up(g_forge.cam_yaw, 0.0f, 0.0f, &h_fwd, &h_up);
 				SET_FLAG(u->object.flags, _object_no_collisions_bit, TRUE);
+				SET_FLAG(u->object.flags, _object_at_rest_bit, TRUE);
 				SET_FLAG(u->object.damage_flags, _object_cannot_take_damage_bit, TRUE);
 				SET_FLAG(u->object.damage_flags, _object_shield_depleted_bit, FALSE);
 				u->object.body_vitality = 1.0f;
@@ -3832,10 +3937,11 @@ void forge_3d_update(float dt)
 		}
 	}
 
-	/* Per-player Monitor vs Spartan visibility & Host-side physics protection for remote Monitors */
+	/* Per-player Monitor vs Spartan visibility, smooth remote Monitor interpolation & Host-side physics protection */
 	if (player_data)
 	{
 		int local_p_abs = forge_get_local_player_abs_index();
+		float lerp_t = (dt > 0.0f && dt < 0.25f) ? (1.0f - (float)exp((double)(-18.0f * dt))) : 0.35f;
 		long p_idx;
 		for (p_idx = data_next_index(player_data, NONE); p_idx != NONE; p_idx = data_next_index(player_data, p_idx))
 		{
@@ -3845,47 +3951,80 @@ void forge_3d_update(float dt)
 				int p_abs = (int)DATUM_INDEX_TO_ABSOLUTE_INDEX(p_idx);
 				int is_mon = forge_is_unit_in_monitor_mode(pl->unit_index);
 				forge_hide_spartan_linked_attachments_and_children(pl->unit_index, is_mon ? 1 : 0);
-				if (is_mon && game_connection() == _game_connection_network_server &&
-					p_abs != local_p_abs && p_abs >= 0 && p_abs < 128 &&
+				if (is_mon && p_abs != local_p_abs && p_abs >= 0 && p_abs < 128 &&
 					g_forge.player_has_monitor_pos[p_abs])
 				{
-					struct unit_datum *u = (struct unit_datum *)object_try_and_get_and_verify_type(pl->unit_index, _object_mask_unit);
-					if (u)
+					if (!g_forge.player_has_render_pos[p_abs])
 					{
-						real_point3d u_pos;
-						real_vector3d m_fwd, m_up, h_fwd, h_up;
-						forge_compute_safe_spartan_stand_pos(
-							g_forge.player_monitor_pos[p_abs][0],
-							g_forge.player_monitor_pos[p_abs][1],
-							g_forge.player_monitor_pos[p_abs][2],
-							&u_pos);
-						euler_to_forward_up(g_forge.player_monitor_yaw[p_abs], g_forge.player_monitor_pitch[p_abs], 0.0f, &m_fwd, &m_up);
-						euler_to_forward_up(g_forge.player_monitor_yaw[p_abs], 0.0f, 0.0f, &h_fwd, &h_up);
-						SET_FLAG(u->object.flags, _object_no_collisions_bit, TRUE);
-						SET_FLAG(u->object.damage_flags, _object_cannot_take_damage_bit, TRUE);
-						SET_FLAG(u->object.damage_flags, _object_shield_depleted_bit, FALSE);
-						u->object.body_vitality = 1.0f;
-						u->object.shield_vitality = 1.0f;
-						object_set_automatic_deactivation(pl->unit_index, FALSE);
-						if (scenario_leaf_index_from_point(&u_pos) != NONE)
-							object_set_position(pl->unit_index, &u_pos, &h_fwd, &h_up);
-						else
+						g_forge.player_has_render_pos[p_abs] = 1;
+						g_forge.player_monitor_render_pos[p_abs][0] = g_forge.player_monitor_pos[p_abs][0];
+						g_forge.player_monitor_render_pos[p_abs][1] = g_forge.player_monitor_pos[p_abs][1];
+						g_forge.player_monitor_render_pos[p_abs][2] = g_forge.player_monitor_pos[p_abs][2];
+						g_forge.player_monitor_render_yaw[p_abs] = g_forge.player_monitor_yaw[p_abs];
+						g_forge.player_monitor_render_pitch[p_abs] = g_forge.player_monitor_pitch[p_abs];
+					}
+					else
+					{
+						float dyaw = g_forge.player_monitor_yaw[p_abs] - g_forge.player_monitor_render_yaw[p_abs];
+						float dpitch = g_forge.player_monitor_pitch[p_abs] - g_forge.player_monitor_render_pitch[p_abs];
+						while (dyaw > 3.14159265f) dyaw -= 6.2831853f;
+						while (dyaw < -3.14159265f) dyaw += 6.2831853f;
+						g_forge.player_monitor_render_pos[p_abs][0] += (g_forge.player_monitor_pos[p_abs][0] - g_forge.player_monitor_render_pos[p_abs][0]) * lerp_t;
+						g_forge.player_monitor_render_pos[p_abs][1] += (g_forge.player_monitor_pos[p_abs][1] - g_forge.player_monitor_render_pos[p_abs][1]) * lerp_t;
+						g_forge.player_monitor_render_pos[p_abs][2] += (g_forge.player_monitor_pos[p_abs][2] - g_forge.player_monitor_render_pos[p_abs][2]) * lerp_t;
+						g_forge.player_monitor_render_yaw[p_abs] += dyaw * lerp_t;
+						g_forge.player_monitor_render_pitch[p_abs] += dpitch * lerp_t;
+					}
+
+					if (game_connection() == _game_connection_network_server)
+					{
+						struct unit_datum *u = (struct unit_datum *)object_try_and_get_and_verify_type(pl->unit_index, _object_mask_unit);
+						if (u)
 						{
-							u->object.position = u_pos;
-							u->object.forward = h_fwd;
-							u->object.up = h_up;
+							real_point3d u_pos;
+							real_vector3d m_fwd, m_up, h_fwd, h_up;
+							float ux_d, uy_d, uz_d;
+							forge_compute_safe_spartan_stand_pos(
+								g_forge.player_monitor_render_pos[p_abs][0],
+								g_forge.player_monitor_render_pos[p_abs][1],
+								g_forge.player_monitor_render_pos[p_abs][2],
+								&u_pos);
+							euler_to_forward_up(g_forge.player_monitor_render_yaw[p_abs], g_forge.player_monitor_render_pitch[p_abs], 0.0f, &m_fwd, &m_up);
+							euler_to_forward_up(g_forge.player_monitor_render_yaw[p_abs], 0.0f, 0.0f, &h_fwd, &h_up);
+							SET_FLAG(u->object.flags, _object_no_collisions_bit, TRUE);
+							SET_FLAG(u->object.flags, _object_at_rest_bit, TRUE);
+							SET_FLAG(u->object.damage_flags, _object_cannot_take_damage_bit, TRUE);
+							SET_FLAG(u->object.damage_flags, _object_shield_depleted_bit, FALSE);
+							u->object.body_vitality = 1.0f;
+							u->object.shield_vitality = 1.0f;
+							object_set_automatic_deactivation(pl->unit_index, FALSE);
+							ux_d = u->object.position.x - u_pos.x;
+							uy_d = u->object.position.y - u_pos.y;
+							uz_d = u->object.position.z - u_pos.z;
+							/* Only reposition on Host if client prediction hasn't updated within 2.0u, avoiding per-frame oscillation */
+							if (ux_d * ux_d + uy_d * uy_d + uz_d * uz_d > 4.0f)
+							{
+								if (scenario_leaf_index_from_point(&u_pos) != NONE)
+									object_set_position(pl->unit_index, &u_pos, &h_fwd, &h_up);
+								else
+								{
+									u->object.position = u_pos;
+									u->object.forward = h_fwd;
+									u->object.up = h_up;
+								}
+							}
+							u->unit.desired_facing_vector = m_fwd;
+							u->unit.desired_aiming_vector = m_fwd;
+							u->unit.aiming_vector = m_fwd;
+							u->unit.desired_looking_vector = m_fwd;
+							u->unit.looking_vector = m_fwd;
+							u->object.translational_velocity.i = 0.0f;
+							u->object.translational_velocity.j = 0.0f;
+							u->object.translational_velocity.k = 0.0f;
+							u->object.angular_velocity.i = 0.0f;
+							u->object.angular_velocity.j = 0.0f;
+							u->object.angular_velocity.k = 0.0f;
 						}
-						u->unit.desired_facing_vector = m_fwd;
-						u->unit.desired_aiming_vector = m_fwd;
-						u->unit.aiming_vector = m_fwd;
-						u->unit.desired_looking_vector = m_fwd;
-						u->unit.looking_vector = m_fwd;
-						u->object.translational_velocity.i = 0.0f;
-						u->object.translational_velocity.j = 0.0f;
-						u->object.translational_velocity.k = 0.0f;
-						u->object.angular_velocity.i = 0.0f;
-						u->object.angular_velocity.j = 0.0f;
-						u->object.angular_velocity.k = 0.0f;
 					}
 				}
 			}
@@ -4660,6 +4799,7 @@ void forge_3d_update(float dt)
 					forge_compute_safe_spartan_stand_pos(g_forge.cam_x, g_forge.cam_y, g_forge.cam_z, &u_pos);
 					euler_to_forward_up(g_forge.cam_yaw, 0.0f, 0.0f, &h_fwd, &h_up);
 					SET_FLAG(u->object.flags, _object_no_collisions_bit, TRUE);
+					SET_FLAG(u->object.flags, _object_at_rest_bit, TRUE);
 					SET_FLAG(u->object.damage_flags, _object_cannot_take_damage_bit, TRUE);
 					SET_FLAG(u->object.damage_flags, _object_shield_depleted_bit, FALSE);
 					u->object.body_vitality = 1.0f;
@@ -4937,33 +5077,24 @@ void forge_3d_update(float dt)
 		{
 			if (g_forge.grabbed_live_index >= 0)
 			{
-				struct forge_live_instance *released = &g_forge.live_instances[g_forge.grabbed_live_index];
-				struct object_datum *robj = forge_valid_object_get(released->object_index);
-				/* Apply game physics to upright vehicles upon release, while keeping custom-pitched/rotated items locked in place */
-				if (robj)
-				{
-					int is_upright_vehicle = (robj->object.type == _object_type_vehicle &&
-						fabsf(released->pitch) < 0.05f && fabsf(released->roll) < 0.05f);
-					SET_FLAG(robj->object.flags, _object_no_collisions_bit, FALSE);
-					SET_FLAG(robj->object.flags, _object_outside_of_map_bit, FALSE);
-					robj->object.translational_velocity.i = 0.0f;
-					robj->object.translational_velocity.j = 0.0f;
-					robj->object.translational_velocity.k = 0.0f;
-					robj->object.angular_velocity.i = 0.0f;
-					robj->object.angular_velocity.j = 0.0f;
-					robj->object.angular_velocity.k = 0.0f;
-					if (is_upright_vehicle)
-					{
-						SET_FLAG(robj->object.flags, _object_at_rest_bit, FALSE);
-						object_set_automatic_deactivation(released->object_index, FALSE);
-						object_activate(released->object_index);
-						robj->object.translational_velocity.k = -0.02f;
-					}
-					else
-					{
-						SET_FLAG(robj->object.flags, _object_at_rest_bit, TRUE);
-					}
-				}
+				int32_t released_live_idx = g_forge.grabbed_live_index;
+				struct forge_live_instance *released = &g_forge.live_instances[released_live_idx];
+				g_forge.grabbed_live_index = -1;
+				g_forge.grabbed_object_index = NONE;
+				g_forge.grabbed_is_new_spawn = 0;
+
+				/* Apply release transform (is_held = 0) so vehicles wake up physics and become drivable immediately on Host & Clients! */
+				forge_3d_move_instance_ext(
+					released_live_idx,
+					released->x,
+					released->y,
+					released->z,
+					released->yaw,
+					released->pitch,
+					released->roll,
+					0,
+					0);
+
 				if (g_forge.koth_group_placing)
 				{
 					int k;
@@ -4973,7 +5104,7 @@ void forge_3d_update(float dt)
 						if (nidx >= 0 && nidx < g_forge.live_instance_count && g_forge.live_instances[nidx].active)
 						{
 							struct forge_live_instance const *ni = &g_forge.live_instances[nidx];
-							forge_network_send_transform_ext(nidx, ni->object_index, ni->x, ni->y, ni->z, ni->yaw, ni->pitch, ni->roll, 1);
+							forge_network_send_transform_ext(nidx, ni->object_index, ni->x, ni->y, ni->z, ni->yaw, ni->pitch, ni->roll, 0, 1);
 						}
 					}
 					forge_set_status("Placed KOTH Hill #%d", g_forge.koth_group_hill_id);
@@ -4982,7 +5113,7 @@ void forge_3d_update(float dt)
 				else
 				{
 					forge_network_send_transform_ext(
-						g_forge.grabbed_live_index,
+						released_live_idx,
 						released->object_index,
 						released->x,
 						released->y,
@@ -4990,12 +5121,10 @@ void forge_3d_update(float dt)
 						released->yaw,
 						released->pitch,
 						released->roll,
+						0,
 						1);
 					forge_set_status("Placed '%s'", released->tag_path);
 				}
-				g_forge.grabbed_live_index = -1;
-				g_forge.grabbed_object_index = NONE;
-				g_forge.grabbed_is_new_spawn = 0;
 			}
 			else
 			{
@@ -5113,6 +5242,24 @@ void forge_3d_update(float dt)
 					g_forge.grab_yaw = inst->yaw;
 					g_forge.grab_pitch = inst->pitch;
 					g_forge.grab_roll = inst->roll;
+					if (obj && obj->object.type == _object_type_vehicle)
+					{
+						forge_eject_all_passengers_from_vehicle(inst->object_index);
+						if (forge_is_multiplayer_session())
+						{
+							forge_network_send_transform_ext(
+								best,
+								inst->object_index,
+								inst->x,
+								inst->y,
+								inst->z,
+								inst->yaw,
+								inst->pitch,
+								inst->roll,
+								1,
+								1);
+						}
+					}
 					forge_set_status("Holding '%s'", inst->tag_path);
 				}
 			}
@@ -5292,12 +5439,12 @@ void forge_3d_update(float dt)
 						}
 					}
 					if (nidx >= 0 && nidx < g_forge.live_instance_count)
-						forge_3d_move_instance(nidx, nx, ny, nz, ang, 0.0f, 0.0f, 1);
+						forge_3d_move_instance_ext(nidx, nx, ny, nz, ang, 0.0f, 0.0f, 1, 1);
 				}
 			}
 			else
 			{
-				forge_3d_move_instance(g_forge.grabbed_live_index, tx, ty, tz, syaw, spitch, sroll, 1);
+				forge_3d_move_instance_ext(g_forge.grabbed_live_index, tx, ty, tz, syaw, spitch, sroll, 1, 1);
 			}
 		}
 		else

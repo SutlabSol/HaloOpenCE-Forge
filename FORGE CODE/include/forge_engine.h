@@ -14,10 +14,10 @@
 extern "C" {
 #endif
 
-/* ---------- Forge Release Version & Network Protocol Isolation (v1.1.0, 0x4627) */
+/* ---------- Forge Release Version & Network Protocol Isolation (v1.1.1, 0x4628) */
 
-#define FORGE_VERSION_STRING "1.1.0"
-#define FORGE_NETWORK_VERSION 0x4627
+#define FORGE_VERSION_STRING "1.1.1"
+#define FORGE_NETWORK_VERSION 0x4628
 #define STANDARD_OPENCE_NETWORK_VERSION 38
 #define _forge_ai_team_friendly_human _forge_ai_team_friendly
 
@@ -236,6 +236,10 @@ struct forge_runtime_state
 	float player_monitor_pos[128][3];
 	float player_monitor_yaw[128];
 	float player_monitor_pitch[128];
+	uint8_t player_has_render_pos[128];
+	float player_monitor_render_pos[128][3];
+	float player_monitor_render_yaw[128];
+	float player_monitor_render_pitch[128];
 };
 
 enum forge_bind_action
@@ -338,6 +342,7 @@ int32_t forge_3d_spawn_object_at(
 	int16_t team_designator,
 	int broadcast_net);
 void forge_3d_move_instance(int32_t live_idx, float x, float y, float z, float yaw, float pitch, float roll, int broadcast_net);
+void forge_3d_move_instance_ext(int32_t live_idx, float x, float y, float z, float yaw, float pitch, float roll, int is_held, int broadcast_net);
 void forge_3d_delete_instance(int32_t live_idx, int broadcast_net);
 int forge_is_unit_in_monitor_mode(long unit_index);
 int forge_get_local_player_abs_index(void);
@@ -379,6 +384,7 @@ void forge_network_send_transform_ext(
 	long obj_idx,
 	float x, float y, float z,
 	float yaw, float pitch, float roll,
+	int is_held,
 	int immediate);
 void forge_network_send_delete(int32_t live_idx);
 void forge_network_send_delete_ext(int32_t live_idx, long obj_idx);
