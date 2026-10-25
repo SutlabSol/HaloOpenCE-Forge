@@ -1,8 +1,24 @@
-# Halo OpenCE Forge (Standalone Addon)
+# Halo OpenCE Forge v1.1.0 (Standalone Addon)
 
 A standalone **Halo 3-style 3D In-Game Forge Editor & 2D Blueprint Mode** built on top of [Halo: Open Community Edition (OpenCE)](https://github.com/d00tbeep/open-ce).
 
 This repository is structured as a **non-destructive drag-and-drop package**: you can copy its files directly into your existing Halo OpenCE directory without overwriting `halo.exe`, `SDL3.dll`, or any of your base game files.
+
+---
+
+## What's New in v1.1.0 (Multiplayer Collaborative Forge Update)
+
+- **Per-Player Monitor vs. Spartan Synchronization (`!FT:`)**:
+  - Each player in a multiplayer Forge session is independently rendered as **343 Guilty Spark Monitor** when in Forge Mode (`F1`) or as their **Spartan** when in Play Mode, regardless of which mode the local viewer is in.
+  - Remote Monitors fly at their true 3D altitude and orient smoothly using their 3D aiming vector.
+  - Single-tick mode switching (`F1`) synchronizes exact position and facing to the Host without respawn delays or rubberbanding.
+- **Zero Active Camo Bleed**:
+  - Eliminated host-to-client `_distributed_unit_camouflaged_bit` bleed by scoping Monitor unit light/shadow suppression strictly to the local render pass (`forge_render_begin_monitor_visibility` / `forge_render_end_monitor_visibility`).
+- **Full Bidirectional Multiplayer Tag & Object Sync (`!FS:`, `!FH:`, `!FM:`, `!FD:`, `!FQ`)**:
+  - Host and Clients can spawn, grab, move, rotate, and delete map-native objects, external Xbox campaign tags (`cached_tags/`), custom `.ocetags` packages, Lighting & Emitter objects, Player Spawns, Teleporters, and Gametype Objectives (`CTF`, `Oddball`, `KOTH`, `Race`).
+  - Clients automatically fault in external campaign tags and `.ocetags` definitions on the fly when receiving Host spawn packets (`!FH:`) and remap `network_objects_handle_changes` definition indices seamlessly.
+  - Late-joining clients automatically synchronize all active Monitor states and placed/edited Forge instances (`!FQ`).
+- **Network Protocol Version**: Updated to `0x4627` (`v1.1.0`).
 
 ---
 
@@ -21,7 +37,7 @@ This repository is structured as a **non-destructive drag-and-drop package**: yo
   - Edit the PNG images in `OpenCE Forge/ui/` (`panel_spawn_bg.png`, `panel_header_bg.png`, `panel_props_bg.png`, `hud_bar_bg.png`, etc.) in any image editor to customize the Forge menu backgrounds.
 - **Spawn Menu (`F2`) & Add Tags to Cache (`F9`)**
   - Accessible exclusively while in Forge Mode (`F1`).
-  - Browse Vehicles, Weapons, Scenery, Gametype Markers, Teleporters (Origin & Destination with working runtime collision matrices), and AI Encounters.
+  - Browse Vehicles, Weapons, Scenery, Lighting & Emitters, Gametype Markers, Teleporters (Origin & Destination with working runtime collision matrices), and AI Encounters.
   - Press **`F9` (Add Tags to Cache)** inside the `F2` menu to open the **MAPS** window and extract tags from any map into your local tag cache.
 - **First-Launch Local Tag Cache Builder**
   - So that no copyrighted `.map` files or pre-packaged tag caches need to be distributed with the build, `HaloCE Forge.exe` prompts to build your local tag cache (`OpenCE Forge/cached_tags/`) on first launch:

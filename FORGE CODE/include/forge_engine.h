@@ -14,10 +14,11 @@
 extern "C" {
 #endif
 
-/* ---------- Forge Network Protocol Isolation ('F' << 8 | 29 = 0x461D) */
+/* ---------- Forge Release Version & Network Protocol Isolation (v1.1.0, 0x4627) */
 
-#define FORGE_NETWORK_VERSION 0x461D
-#define STANDARD_OPENCE_NETWORK_VERSION 29
+#define FORGE_VERSION_STRING "1.1.0"
+#define FORGE_NETWORK_VERSION 0x4627
+#define STANDARD_OPENCE_NETWORK_VERSION 38
 #define _forge_ai_team_friendly_human _forge_ai_team_friendly
 
 extern int g_forge_session_enabled;
@@ -85,10 +86,12 @@ enum forge_ui_modal
 enum forge_palette_category
 {
 	_forge_cat_weapons = 0,
+	_forge_cat_equipment,
 	_forge_cat_vehicles,
 	_forge_cat_bipeds,
 	_forge_cat_scenery,
 	_forge_cat_barriers_devices,
+	_forge_cat_lights,
 	_forge_cat_spawns_teleporters,
 	_forge_cat_objectives,
 	_forge_cat_ai_squads,
@@ -171,6 +174,9 @@ struct forge_runtime_state
 	/* Physics Beam / Object Grab State */
 	int32_t grabbed_object_index;
 	int32_t grabbed_live_index;
+	int grabbed_is_new_spawn;
+	float grab_orig_x, grab_orig_y, grab_orig_z;
+	float grab_orig_yaw, grab_orig_pitch, grab_orig_roll;
 	float grab_distance;
 	float grab_yaw, grab_pitch, grab_roll;
 	int32_t hovered_object_index;
@@ -216,9 +222,71 @@ struct forge_runtime_state
 	struct forge_scenario_edit_state edit_state;
 	struct forge_live_instance live_instances[FORGE_MAX_LIVE_INSTANCES];
 	int live_instance_count;
+
+	/* Forge Controls & Controller State */
+	int using_controller;
+	int bind_vk[10];
+	int bind_gp[10];
+	float controller_look_sens;
+	float controller_fly_speed;
+
+	/* Per-Player Multiplayer Monitor vs. Spartan State & Orientation */
+	uint8_t player_is_monitor[128];
+	uint8_t player_has_monitor_pos[128];
+	float player_monitor_pos[128][3];
+	float player_monitor_yaw[128];
+	float player_monitor_pitch[128];
+};
+
+enum forge_bind_action
+{
+	FORGE_BIND_TOGGLE_MODE = 0,
+	FORGE_BIND_PALETTE = 1,
+	FORGE_BIND_THIRD_PERSON = 2,
+	FORGE_BIND_QUICK_SAVE = 3,
+	FORGE_BIND_ROTATE_HOLD = 4,
+	FORGE_BIND_SNAP_FLOOR = 5,
+	FORGE_BIND_SNAP_SURFACE = 6,
+	FORGE_BIND_ROT_SNAP = 7,
+	FORGE_BIND_OBJECT_OPTIONS = 8,
+	FORGE_BIND_DELETE_OBJECT = 9,
+	FORGE_BIND_COUNT = 10
+};
+
+enum forge_gamepad_button
+{
+	FORGE_GP_NONE = 0,
+	FORGE_GP_A = 1,
+	FORGE_GP_B = 2,
+	FORGE_GP_X = 3,
+	FORGE_GP_Y = 4,
+	FORGE_GP_BLACK = 5,
+	FORGE_GP_WHITE = 6,
+	FORGE_GP_LTRIGGER = 7,
+	FORGE_GP_RTRIGGER = 8,
+	FORGE_GP_DPAD_UP = 9,
+	FORGE_GP_DPAD_DOWN = 10,
+	FORGE_GP_DPAD_LEFT = 11,
+	FORGE_GP_DPAD_RIGHT = 12,
+	FORGE_GP_START = 13,
+	FORGE_GP_BACK = 14,
+	FORGE_GP_LTHUMB = 15,
+	FORGE_GP_RTHUMB = 16,
+	FORGE_GP_COUNT = 17
 };
 
 extern struct forge_runtime_state g_forge;
+
+void forge_controls_init_defaults(void);
+void forge_controls_load(void);
+void forge_controls_save(void);
+char const *forge_vk_display_name(int vk);
+char const *forge_gp_display_name(int gp);
+char const *forge_gp_icon_token(int gp);
+char const *forge_action_prompt(int action);
+int forge_gp_button_down(int gp);
+int forge_action_down(int action);
+void forge_poll_controller_state(float *out_lx, float *out_ly, float *out_rx, float *out_ry, float *out_lt, float *out_rt);
 
 /* ---------- Prototypes: forge_runtime_tags.c */
 
@@ -228,6 +296,8 @@ int forge_is_multiplayer_session(void);
 int forge_catalog_entry_allowed(struct forge_catalog_entry const *entry);
 long forge_resolve_engine_tag(uint32_t group_tag, char const *tag_path, uint32_t *out_actual_group);
 int forge_ui_inject_custom_map(char const *donor_map_path);
+int forge_clear_custom_tag_cache(void);
+int forge_reset_all_tag_caches_and_restart(void);
 int forge_ui_save_copy_as(char const *new_map_name);
 void forge_trigger_save_map_action(void);
 void forge_load_saved_map_state_if_present(char const *map_name);
@@ -256,6 +326,8 @@ void forge_blueprint_draw(short window_x0, short window_y0, short window_x1, sho
 
 void forge_3d_update(float dt);
 void forge_3d_apply_monitor_camera(short local_player_index);
+int forge_3d_fill_live_observer_result(void *out_observer_result);
+int forge_is_main_menu_active(void);
 void forge_3d_draw_hud(short local_player_index, short window_x0, short window_y0, short window_x1, short window_y1, long font_index, short line_height);
 int32_t forge_3d_spawn_object_at(
 	uint32_t group_tag,
@@ -267,9 +339,20 @@ int32_t forge_3d_spawn_object_at(
 	int broadcast_net);
 void forge_3d_move_instance(int32_t live_idx, float x, float y, float z, float yaw, float pitch, float roll, int broadcast_net);
 void forge_3d_delete_instance(int32_t live_idx, int broadcast_net);
+int forge_is_unit_in_monitor_mode(long unit_index);
+int forge_get_local_player_abs_index(void);
+void forge_render_begin_monitor_visibility(void);
+void forge_render_end_monitor_visibility(void);
+void forge_apply_host_player_monitor_state(int player_abs_idx, int is_monitor, float x, float y, float z, float yaw, float pitch);
+int32_t forge_3d_adopt_or_find_object_instance(long object_index);
 
 /* ---------- Prototypes: forge_network.c */
 
+uint32_t forge_catalog_entry_hash(uint32_t group_tag, char const *tag_path);
+struct forge_catalog_entry const *forge_find_catalog_entry_by_hash(uint32_t hash);
+void forge_network_reset_session(void);
+void forge_network_sync_tick(void);
+void forge_network_send_monitor_mode(int is_monitor, float x, float y, float z, float yaw, float pitch);
 void forge_network_send_spawn(
 	uint32_t group_tag,
 	char const *tag_path,
@@ -277,13 +360,39 @@ void forge_network_send_spawn(
 	float x, float y, float z,
 	float yaw, float pitch, float roll,
 	int16_t team_designator);
+void forge_network_send_spawn_ext(
+	int32_t live_idx,
+	uint32_t group_tag,
+	char const *tag_path,
+	uint8_t source_cache_id,
+	float x, float y, float z,
+	float yaw, float pitch, float roll,
+	int16_t team_designator,
+	long host_obj_idx,
+	long host_def_idx);
 void forge_network_send_transform(
 	int32_t live_idx,
 	float x, float y, float z,
 	float yaw, float pitch, float roll);
+void forge_network_send_transform_ext(
+	int32_t live_idx,
+	long obj_idx,
+	float x, float y, float z,
+	float yaw, float pitch, float roll,
+	int immediate);
 void forge_network_send_delete(int32_t live_idx);
+void forge_network_send_delete_ext(int32_t live_idx, long obj_idx);
 int forge_network_intercept_chat_packet(long machine_index, char const *text, int is_from_client_to_host);
+void forge_network_pre_handle_object_changes(void const *entries, short count);
+void forge_network_post_handle_object_changes(void const *entries, short count);
 void forge_runtime_on_map_unload(void);
+int forge_window_is_focused(void);
+short forge_key_state(int vk);
+
+#ifdef _WIN32
+#undef GetAsyncKeyState
+#define GetAsyncKeyState(vk) forge_key_state(vk)
+#endif
 
 #ifdef __cplusplus
 }
