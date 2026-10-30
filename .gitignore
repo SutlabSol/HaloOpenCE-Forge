@@ -1,6 +1,56 @@
-# Ignore user map data and local generated caches
+# IDE folders
+.idea/
+.vs/
+
+# Caches
+__pycache__
+.mypy_cache
+.pytest_cache/
+.cache/
+
+# Build files
+build/
+.ninja_*
+build.ninja
+*.zip
+*.lib
+*.o
+*.obj
+!Forge Objective Markers/*.obj
+
+# Generated configs & logs
+compile_commands.json
+config.toml
+halo.log
+device_identity.txt
+
+# Executables & PDBs (allow root halo.exe and forge_asset_compiler.exe)
+*.exe
+!halo.exe
+!OpenCE Forge/tools/forge_asset_compiler.exe
+*.pdb
+xbox/
+!source/**/xbox/
+
+# Locally extracted proprietary game data & local scratch folders (never commit)
+assets/
+!port/assets/
+original/
 maps/
 custom_maps/
+mods/
+saves/
+replays/
+screenshots/
+OpenCE Build/
+Forge Handoff Package/
+OPC-Forge-Inventor/
+sample tags/
+FORGE_TAG_CACHE_SPEC.md
+OpenCE & Forge Tag Cache Brief.md
+LICENSE.md
+
+# Forge local caches & donor maps
 forge_maps/*
 !forge_maps/.gitkeep
 OpenCE Forge/forge_maps/*.map
@@ -8,9 +58,10 @@ OpenCE Forge/cached_tags/*
 !OpenCE Forge/cached_tags/.gitkeep
 !OpenCE Forge/cached_tags/markers/
 !OpenCE Forge/cached_tags/markers/*.ftag
+OpenCE Forge/custom_tags/*
+OpenCE Forge/ocetags/*
 FORGE CODE/GAME MAPS/
 FORGE CODE/build/
-*.o
-*.obj
-!Forge Objective Markers/*.obj
-*.pdb
+
+# CI build outputs (tools/ci_build.py)
+dist/

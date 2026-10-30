@@ -1,0 +1,41 @@
+diff --git a/android-project/app/src/main/java/org/libsdl/app/SDLControllerManager.java b/android-project/app/src/main/java/org/libsdl/app/SDLControllerManager.java
+--- a/android-project/app/src/main/java/org/libsdl/app/SDLControllerManager.java
++++ b/android-project/app/src/main/java/org/libsdl/app/SDLControllerManager.java
+@@ -787,6 +787,37 @@ class SDLGenericMotionListener_API14 implements View.OnGenericMotionListener {
+                         consumed = true;
+                         break;
+ 
++                    case MotionEvent.ACTION_BUTTON_PRESS:
++                        if (checkRelativeEvent(event)) {
++                            x = getEventX(event, i);
++                            y = getEventY(event, i);
++                            SDLActivity.onNativeMouse(event.getButtonState(), MotionEvent.ACTION_DOWN, x, y, true);
++                            consumed = true;
++                        }
++                        break;
++
++                    case MotionEvent.ACTION_BUTTON_RELEASE:
++                        if (checkRelativeEvent(event)) {
++                            x = getEventX(event, i);
++                            y = getEventY(event, i);
++                            SDLActivity.onNativeMouse(event.getButtonState(), MotionEvent.ACTION_UP, x, y, true);
++                            consumed = true;
++                        }
++                        break;
++
++                    case MotionEvent.ACTION_MOVE:
++                        // Pointer capture delivers relative mouse motion as ACTION_MOVE. It
++                        // carries the buttons held, which SDL compares with the last state it
++                        // was told: reporting none here ends a held button (a shot, a throw)
++                        // as the pointer moves.
++                        if (checkRelativeEvent(event)) {
++                            x = getEventX(event, i);
++                            y = getEventY(event, i);
++                            SDLActivity.onNativeMouse(event.getButtonState(), action, x, y, true);
++                            consumed = true;
++                        }
++                        break;
++
+                     case MotionEvent.ACTION_HOVER_MOVE:
+                         x = getEventX(event, i);
+                         y = getEventY(event, i);

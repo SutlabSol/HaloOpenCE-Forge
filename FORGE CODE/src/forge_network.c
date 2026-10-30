@@ -509,26 +509,6 @@ void forge_network_send_spawn_ext(
 	}
 }
 
-void forge_network_send_spawn(
-	uint32_t group_tag,
-	char const *tag_path,
-	uint8_t source_cache_id,
-	float x, float y, float z,
-	float yaw, float pitch, float roll,
-	int16_t team_designator)
-{
-	forge_network_send_spawn_ext(
-		-1,
-		group_tag,
-		tag_path,
-		source_cache_id,
-		x, y, z,
-		yaw, pitch, roll,
-		team_designator,
-		NONE,
-		NONE);
-}
-
 void forge_network_send_transform_ext(
 	int32_t live_idx,
 	long obj_idx,
@@ -589,18 +569,6 @@ void forge_network_send_transform_ext(
 	}
 }
 
-void forge_network_send_transform(
-	int32_t live_idx,
-	float x, float y, float z,
-	float yaw, float pitch, float roll)
-{
-	long obj_idx = NONE;
-	int is_held = (live_idx >= 0 && g_forge.grabbed_live_index == live_idx) ? 1 : 0;
-	if (live_idx >= 0 && live_idx < g_forge.live_instance_count)
-		obj_idx = g_forge.live_instances[live_idx].object_index;
-	forge_network_send_transform_ext(live_idx, obj_idx, x, y, z, yaw, pitch, roll, is_held, 0);
-}
-
 void forge_network_send_delete_ext(int32_t live_idx, long obj_idx)
 {
 	char msg[64];
@@ -620,14 +588,6 @@ void forge_network_send_delete_ext(int32_t live_idx, long obj_idx)
 	{
 		forge_broadcast_packet_to_clients(msg, -1);
 	}
-}
-
-void forge_network_send_delete(int32_t live_idx)
-{
-	long obj_idx = NONE;
-	if (live_idx >= 0 && live_idx < g_forge.live_instance_count)
-		obj_idx = g_forge.live_instances[live_idx].object_index;
-	forge_network_send_delete_ext(live_idx, obj_idx);
 }
 
 static long forge_find_live_object_by_abs_index(int obj_abs)

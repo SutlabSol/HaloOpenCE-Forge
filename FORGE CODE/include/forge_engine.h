@@ -1,5 +1,5 @@
 /*
- * OpenCE Forge ("HaloCE Forge.exe")
+ * OpenCE : Forge ("halo.exe")
  * Runtime Engine Header - Shared across all Forge runtime modules.
  * Strictly modular inside FORGE CODE/ with zero modifications to source/ or port/.
  */
@@ -18,11 +18,16 @@ extern "C" {
 
 #define FORGE_VERSION_STRING "1.1.1"
 #define FORGE_NETWORK_VERSION 0x4628
-#define STANDARD_OPENCE_NETWORK_VERSION 38
+/* Standard (non-Forge) sessions use OpenCE's own HALO_PORT_NETWORK_VERSION
+ * (port/linux/include/halo_port_limits.h), read in forge_get_network_version(),
+ * so an upstream protocol bump never leaves Forge unable to join stock games. */
 #define _forge_ai_team_friendly_human _forge_ai_team_friendly
 
 extern int g_forge_session_enabled;
-int forge_get_network_version(void);
+long forge_get_network_version(void);
+
+/* Engine function (source/main/main.h) used by several Forge modules */
+char *main_get_map_name(void);
 
 #ifdef _WIN32
 __declspec(dllimport) short __stdcall GetAsyncKeyState(int vKey);
@@ -70,7 +75,6 @@ enum forge_editor_mode
 {
 	_forge_mode_play = 0,         /* Normal Spartan / Player control */
 	_forge_mode_3d_monitor = 1,   /* Mode 2: 3D In-Engine 343 Guilty Spark Monitor & Physics Beam */
-	_forge_mode_2d_blueprint = 2, /* Mode 1: Top-Down Overhead Camera & Shining Drop Marker */
 	NUMBER_OF_FORGE_MODES
 };
 
@@ -79,7 +83,7 @@ enum forge_ui_modal
 	_forge_modal_none = 0,
 	_forge_modal_spawn_palette,
 	_forge_modal_object_properties,
-	_forge_modal_inject_custom_tags,
+
 	_forge_modal_save_copy_as
 };
 
@@ -191,15 +195,6 @@ struct forge_runtime_state
 	float koth_group_radius;
 	int32_t koth_group_live_indices[10];
 
-	/* Mode 1: Top-Down Overhead Camera & Shining Drop Icon State */
-	int overhead_initialized;
-	float bp_center_x, bp_center_y, bp_cam_z;
-	float bp_ground_z;
-	float bp_height_offset;
-	float bp_yaw;
-	float bp_item_yaw;
-	float bp_zoom;
-
 	/* Catalogs from cached_tags / forgeasset.map (0) and customforgeasset.map (1) */
 	struct forge_catalog_entry catalog[FORGE_MAX_CATALOG_ENTRIES];
 	int catalog_count;
@@ -302,6 +297,17 @@ long forge_resolve_engine_tag(uint32_t group_tag, char const *tag_path, uint32_t
 int forge_ui_inject_custom_map(char const *donor_map_path);
 int forge_clear_custom_tag_cache(void);
 int forge_reset_all_tag_caches_and_restart(void);
+int forge_reset_stock_tag_cache(void);
+int forge_ui_open_map_for_tag_browser(char const *map_path);
+void forge_ui_close_map_tag_browser(void);
+int forge_ui_map_tag_count(int category_tab);
+int forge_ui_map_tag_get_info(int category_tab, int list_index, char *out_short_name, size_t short_sz, char *out_full_path, size_t path_sz, char *out_type_str, size_t type_sz, char *out_size_str, size_t size_sz);
+int forge_ui_extract_selected_map_tag(int category_tab, int list_index, char const *custom_display_name);
+int forge_ui_installed_tag_count(int category_tab);
+int forge_ui_installed_tag_get_info(int category_tab, int list_index, char *out_display_name, size_t disp_sz, char *out_full_path, size_t path_sz, char *out_type_str, size_t type_sz, char *out_size_str, size_t size_sz, int *out_is_custom);
+int forge_ui_installed_tag_delete(int category_tab, int list_index);
+struct tag_injector_mesh;
+int forge_ui_build_tag_preview_mesh(int is_installed_mode, int category_tab, int list_index, struct tag_injector_mesh *mesh);
 int forge_ui_save_copy_as(char const *new_map_name);
 void forge_trigger_save_map_action(void);
 void forge_load_saved_map_state_if_present(char const *map_name);
@@ -318,13 +324,6 @@ int32_t forge_ai_spawn_unit_live(
 	int16_t team_designator,
 	int32_t *out_unit_index);
 void forge_ai_clear_all_live(void);
-
-/* ---------- Prototypes: forge_blueprint_2d.c */
-
-void forge_blueprint_enter(void);
-void forge_blueprint_update(float dt);
-void forge_blueprint_apply_camera(void);
-void forge_blueprint_draw(short window_x0, short window_y0, short window_x1, short window_y1, long font_index, short line_height);
 
 /* ---------- Prototypes: forge_3d_mode.c */
 
@@ -358,13 +357,6 @@ struct forge_catalog_entry const *forge_find_catalog_entry_by_hash(uint32_t hash
 void forge_network_reset_session(void);
 void forge_network_sync_tick(void);
 void forge_network_send_monitor_mode(int is_monitor, float x, float y, float z, float yaw, float pitch);
-void forge_network_send_spawn(
-	uint32_t group_tag,
-	char const *tag_path,
-	uint8_t source_cache_id,
-	float x, float y, float z,
-	float yaw, float pitch, float roll,
-	int16_t team_designator);
 void forge_network_send_spawn_ext(
 	int32_t live_idx,
 	uint32_t group_tag,
@@ -375,10 +367,6 @@ void forge_network_send_spawn_ext(
 	int16_t team_designator,
 	long host_obj_idx,
 	long host_def_idx);
-void forge_network_send_transform(
-	int32_t live_idx,
-	float x, float y, float z,
-	float yaw, float pitch, float roll);
 void forge_network_send_transform_ext(
 	int32_t live_idx,
 	long obj_idx,
@@ -386,7 +374,6 @@ void forge_network_send_transform_ext(
 	float yaw, float pitch, float roll,
 	int is_held,
 	int immediate);
-void forge_network_send_delete(int32_t live_idx);
 void forge_network_send_delete_ext(int32_t live_idx, long obj_idx);
 int forge_network_intercept_chat_packet(long machine_index, char const *text, int is_from_client_to_host);
 void forge_network_pre_handle_object_changes(void const *entries, short count);

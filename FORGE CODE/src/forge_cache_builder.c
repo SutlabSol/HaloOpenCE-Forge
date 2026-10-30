@@ -20,7 +20,7 @@ scenario exporter (.map, 140x114 .bmp, .txt).
 #include "scenario/scenario_definitions.h"
 #include "structures/structure_bsp_definitions.h"
 #include "physics/collision_bsp_definitions.h"
-#include "../../port/third_party/zlib/zlib_prefixed.h"
+#include "zlib_prefixed.h"
 
 extern void *custom_edition_sounds_encode(
 	void const *samples,
@@ -44,6 +44,7 @@ extern void platform_translate_path(char const *xbox_path, char *out_path, size_
 #include <direct.h>
 #include <io.h>
 #define FORGE_MKDIR(p) _mkdir(p)
+extern unsigned long __stdcall GetModuleFileNameA(void *hModule, char *lpFilename, unsigned long nSize);
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -80,7 +81,7 @@ extern void platform_translate_path(char const *xbox_path, char *out_path, size_
 
 #define CE_TAG_BASE_ADDR 0x40440000UL
 #define XBOX_TAG_BASE_ADDR 0x803A6000UL
-#define CE_TAG_MAX_BYTES 0x01700000UL
+#define CE_TAG_MAX_BYTES 0x07A00000UL
 
 #define TAG_HEADER_SIZE 0x28
 #define TAG_INSTANCE_SIZE 0x20
@@ -498,29 +499,47 @@ static int forge_source_map_open(char const *path, struct forge_source_map *map)
 
 		if (map->version == CACHE_VERSION_XBOX)
 		{
-			snprintf(cache_cand, sizeof(cache_cand), "OpenCE Forge/cached_tags/xbox_cache/%s", map->filename);
-			cf = fopen(cache_cand, "rb");
-			if (cf)
+			int slot;
+			for (slot = 0; slot <= 6; slot++)
 			{
-				long csz = 0;
-				if (fseek(cf, 0, SEEK_END) == 0 && (csz = ftell(cf)) >= (long)(map->tag_data_offset + map->tag_data_size))
+				char z_xbox[64];
+				if (slot < 6)
+					snprintf(z_xbox, sizeof(z_xbox), "z:\\cache00%d.map", slot);
+				else
+					snprintf(z_xbox, sizeof(z_xbox), "z:\\cache_donor.map");
+				platform_translate_path(z_xbox, cache_cand, sizeof(cache_cand));
+				cf = fopen(cache_cand, "rb");
+				if (cf)
 				{
-					map->file_size = (uint32_t)csz;
-					map->data = (uint8_t *)malloc(map->file_size);
-					if (map->data)
+					uint8_t zhdr[0x800];
+					long csz = 0;
+					if (fseek(cf, 0, SEEK_END) == 0 &&
+						(csz = ftell(cf)) >= (long)(map->tag_data_offset + map->tag_data_size) &&
+						fseek(cf, 0, SEEK_SET) == 0 &&
+						fread(zhdr, 1, sizeof(zhdr), cf) == sizeof(zhdr) &&
+						read_u32(zhdr) == CACHE_HEADER_SIGNATURE &&
+						read_s32(zhdr + 0x04) == CACHE_VERSION_XBOX &&
+						read_u32(zhdr + 0x10) == map->tag_data_offset &&
+						read_u32(zhdr + 0x14) == map->tag_data_size &&
+						_strnicmp((char const *)(zhdr + 0x20), map->map_name, 31) == 0)
 					{
-						fseek(cf, 0, SEEK_SET);
-						if (fread(map->data, 1, map->file_size, cf) == map->file_size)
+						map->file_size = (uint32_t)csz;
+						map->data = (uint8_t *)malloc(map->file_size);
+						if (map->data)
 						{
-							fclose(cf);
-							fclose(f);
-							goto parse_tag_header;
+							fseek(cf, 0, SEEK_SET);
+							if (fread(map->data, 1, map->file_size, cf) == map->file_size)
+							{
+								fclose(cf);
+								fclose(f);
+								goto parse_tag_header;
+							}
+							free(map->data);
+							map->data = NULL;
 						}
-						free(map->data);
-						map->data = NULL;
 					}
+					fclose(cf);
 				}
-				fclose(cf);
 			}
 		}
 
@@ -561,20 +580,6 @@ static int forge_source_map_open(char const *path, struct forge_source_map *map)
 			}
 			free(comp_buf);
 			map->file_size = 0x800u + (uint32_t)dst_len;
-
-			if (map->version == CACHE_VERSION_XBOX)
-			{
-				/* Cache the decompressed Xbox map to OpenCE Forge/cached_tags/xbox_cache/ for instant future opens */
-				FORGE_MKDIR("OpenCE Forge");
-				FORGE_MKDIR("OpenCE Forge/cached_tags");
-				FORGE_MKDIR("OpenCE Forge/cached_tags/xbox_cache");
-				cf = fopen(cache_cand, "wb");
-				if (cf)
-				{
-					fwrite(map->data, 1, map->file_size, cf);
-					fclose(cf);
-				}
-			}
 		}
 	}
 	else
@@ -676,17 +681,6 @@ static char const *src_tag_name(struct forge_source_map const *map, int32_t idx)
 	if (!memchr(map->data + map->tag_data_offset + off, 0, map->tag_data_size - off))
 		return NULL;
 	return (char const *)(map->data + map->tag_data_offset + off);
-}
-
-static uint8_t const *src_ptr(struct forge_source_map const *map, uint32_t addr, uint32_t bytes)
-{
-	uint32_t off;
-	if (addr < map->tag_base_addr)
-		return NULL;
-	off = addr - map->tag_base_addr;
-	if (off > map->tag_data_size || bytes > map->tag_data_size - off)
-		return NULL;
-	return map->data + map->tag_data_offset + off;
 }
 
 /* ---------- resource map (bitmaps.map, sounds.map, loc.map) reader */
@@ -1839,7 +1833,7 @@ static int builder_serialize_cache_file(
 	write_u32(out.data + 0x64u, crc);
 	if (map_name && strcmp(map_name, "forgeasset") != 0 && strcmp(map_name, "customforgeasset") != 0)
 	{
-		write_u32(out.data + 0x1FCu, 0x464C4731u); /* 'FLG1' OpenCE Forge map signature */
+		write_u32(out.data + 0x1FCu, 0x464C4731u); /* 'FLG1' OpenCE : Forge map signature */
 	}
 	write_u32(out.data + 0x7FCu, CACHE_FOOTER_SIGNATURE);
 
@@ -1880,7 +1874,7 @@ static void forge_write_credits_file(
 
 	if (!append_section)
 	{
-		fprintf(f, "# OpenCE Forge - Asset Attribution & Community Credits\n\n");
+		fprintf(f, "# OpenCE : Forge - Asset Attribution & Community Credits\n\n");
 		fprintf(f, "Every tag extracted and compiled into `forgeasset.map` and `customforgeasset.map` is recorded below with its tag class, path, source `.map` file, and original creator attribution.\n\n");
 	}
 
@@ -2600,94 +2594,6 @@ int forge_enumerate_map_catalog(
 	return count;
 }
 
-static int32_t builder_resolve_tag_from_donors(
-	struct forge_builder *b,
-	struct forge_source_map const *donors,
-	int donor_count,
-	uint32_t group_tag,
-	char const *tag_path)
-{
-	int32_t idx;
-	int d;
-	if (!b || !tag_path || !tag_path[0])
-		return -1;
-	idx = builder_find_tag(b, group_tag, tag_path);
-	if (idx >= 0)
-	{
-		if (!b->tags[idx].cloned && b->base_map && idx < b->base_map->tag_count)
-			builder_ensure_tag(b, b->base_map, idx);
-		return idx;
-	}
-	for (d = 0; d < donor_count; d++)
-	{
-		if (donors[d].data)
-		{
-			int32_t sidx = src_map_find_tag(&donors[d], group_tag, tag_path);
-			if (sidx >= 0)
-				return builder_ensure_tag(b, &donors[d], sidx);
-		}
-	}
-	return -1;
-}
-
-static int16_t scenario_ensure_palette_entry(
-	struct forge_builder *b,
-	uint32_t scnr_off,
-	uint32_t pal_field_off,
-	uint32_t elem_size,
-	int32_t dst_tag_idx)
-{
-	int32_t count = read_s32(b->tag_buf.data + scnr_off + pal_field_off + 0);
-	uint32_t addr = read_u32(b->tag_buf.data + scnr_off + pal_field_off + 4);
-	uint32_t target_handle = b->tags[dst_tag_idx].handle;
-	int32_t i;
-	uint32_t new_off;
-
-	if (count > 0 && addr >= CE_TAG_BASE_ADDR)
-	{
-		uint32_t arr_off = addr - CE_TAG_BASE_ADDR;
-		for (i = 0; i < count; i++)
-		{
-			uint32_t eo = arr_off + (uint32_t)i * elem_size;
-			if (eo + 16u <= b->tag_buf.size && read_u32(b->tag_buf.data + eo + 12u) == target_handle)
-				return (int16_t)i;
-		}
-	}
-
-	new_off = buf_alloc(&b->tag_buf, (uint32_t)(count + 1) * elem_size, 4);
-	if (count > 0 && addr >= CE_TAG_BASE_ADDR)
-	{
-		memcpy(b->tag_buf.data + new_off, b->tag_buf.data + (addr - CE_TAG_BASE_ADDR), (size_t)count * elem_size);
-	}
-	write_u32(b->tag_buf.data + new_off + (uint32_t)count * elem_size + 0u, b->tags[dst_tag_idx].primary_group);
-	write_u32(b->tag_buf.data + new_off + (uint32_t)count * elem_size + 4u, b->tags[dst_tag_idx].name_address);
-	write_s32(b->tag_buf.data + new_off + (uint32_t)count * elem_size + 8u, 0);
-	write_u32(b->tag_buf.data + new_off + (uint32_t)count * elem_size + 12u, target_handle);
-
-	write_s32(b->tag_buf.data + scnr_off + pal_field_off + 0u, count + 1);
-	write_u32(b->tag_buf.data + scnr_off + pal_field_off + 4u, CE_TAG_BASE_ADDR + new_off);
-	return (int16_t)count;
-}
-
-static uint32_t scenario_append_element(
-	struct forge_builder *b,
-	uint32_t scnr_off,
-	uint32_t block_field_off,
-	uint32_t elem_size)
-{
-	int32_t count = read_s32(b->tag_buf.data + scnr_off + block_field_off + 0);
-	uint32_t addr = read_u32(b->tag_buf.data + scnr_off + block_field_off + 4);
-	uint32_t new_off = buf_alloc(&b->tag_buf, (uint32_t)(count + 1) * elem_size, 4);
-
-	if (count > 0 && addr >= CE_TAG_BASE_ADDR)
-	{
-		memcpy(b->tag_buf.data + new_off, b->tag_buf.data + (addr - CE_TAG_BASE_ADDR), (size_t)count * elem_size);
-	}
-	write_s32(b->tag_buf.data + scnr_off + block_field_off + 0u, count + 1);
-	write_u32(b->tag_buf.data + scnr_off + block_field_off + 4u, CE_TAG_BASE_ADDR + new_off);
-	return new_off + (uint32_t)count * elem_size;
-}
-
 static uint8_t *build_blueprint_bmp_buffer(
 	char const *custom_bmp_hint_path,
 	struct forge_map_blueprint_data const *bp,
@@ -2981,19 +2887,6 @@ static void cb_sanitize_cached_leaf(char const *tag_path, char *out_name, size_t
 			out_name[j++] = c;
 	}
 	out_name[j] = 0;
-}
-
-static void cb_build_ftag_path(uint32_t group_tag, char const *tag_path, char *out_path, size_t out_sz)
-{
-	char sanitized[200];
-	char const *sub_dir = "misc";
-	if (group_tag == 'scen') sub_dir = "scenery";
-	else if (group_tag == 'vehi') sub_dir = "vehicles";
-	else if (group_tag == 'weap' || group_tag == 'eqip') sub_dir = "weapons";
-	else if (group_tag == 'bipd') sub_dir = "bipeds";
-	else if (group_tag == 'mach' || group_tag == 'ctrl' || group_tag == 'lifi') sub_dir = "devices";
-	cb_sanitize_cached_leaf(tag_path, sanitized, sizeof(sanitized));
-	snprintf(out_path, out_sz, "OpenCE Forge/cached_tags/%s/%s.ftag", sub_dir, sanitized);
 }
 
 static void cb_build_fcol_path(uint32_t group_tag, char const *tag_path, char *out_path, size_t out_sz)
@@ -4907,7 +4800,6 @@ static int cb_find_xbox_donor_map_for_tag(
 		"sidewinder.map", "wizard.map"
 	};
 	static char const *const map_dirs[] = {
-		"OpenCE Forge/cached_tags/xbox_cache",
 		"maps",
 		"assets/maps",
 		"../assets/maps",
@@ -7161,6 +7053,241 @@ static void inplace_apply_default_object_edit(
 	}
 }
 
+static int forge_build_xbox_flg1_map(
+	char const *want_file,
+	char const *base_map_path,
+	char const *output_map_name,
+	struct forge_scenario_edit_state const *edits)
+{
+	char xbox_path[512];
+	char base_stem[64];
+	char custom_bmp_hint[512];
+	char map_path[512];
+	char desc_buf[512];
+	char line[512];
+	FILE *in_f = NULL;
+	FILE *out_f = NULL;
+	long raw_sz = 0;
+	struct forge_byte_buf out;
+	struct forge_byte_buf state_buf;
+	struct forge_map_blueprint_data *bp = NULL;
+	uint8_t *bmp_mem = NULL;
+	uint32_t bmp_size = 0, desc_len = 0;
+	uint32_t state_foff = 0, state_size = 0, bmp_foff = 0, desc_foff = 0;
+	int line_len, i;
+
+	snprintf(base_stem, sizeof(base_stem), "%s", want_file);
+	{
+		char *dot = strrchr(base_stem, '.');
+		if (dot)
+			*dot = '\0';
+	}
+	if (!base_stem[0])
+		snprintf(base_stem, sizeof(base_stem), "bloodgulch");
+
+	snprintf(xbox_path, sizeof(xbox_path), "maps/%s.map", base_stem);
+	in_f = fopen(xbox_path, "rb");
+	if (!in_f && base_map_path && base_map_path[0])
+	{
+		snprintf(xbox_path, sizeof(xbox_path), "%s", base_map_path);
+		in_f = fopen(xbox_path, "rb");
+	}
+	if (!in_f)
+		return 0;
+
+	if (fseek(in_f, 0, SEEK_END) != 0 || (raw_sz = ftell(in_f)) < 0x800L || fseek(in_f, 0, SEEK_SET) != 0)
+	{
+		fclose(in_f);
+		return 0;
+	}
+
+	/* If in_f is an already-saved FLG1 Xbox map, strip its previous trailer at 0x1E4 */
+	{
+		uint8_t hdr_peek[0x200];
+		if (fread(hdr_peek, 1, sizeof(hdr_peek), in_f) == sizeof(hdr_peek))
+		{
+			uint32_t prev_sig = read_u32(hdr_peek + 0x1FCu);
+			uint32_t prev_st = read_u32(hdr_peek + 0x1E4u);
+			if (prev_sig == 0x464C4731u && prev_st >= 0x800u && (long)prev_st < raw_sz)
+				raw_sz = (long)prev_st;
+		}
+		fseek(in_f, 0, SEEK_SET);
+	}
+
+	buf_init(&out, (uint32_t)raw_sz + 65536u);
+	if (!out.data || fread(out.data, 1, (size_t)raw_sz, in_f) != (size_t)raw_sz)
+	{
+		fclose(in_f);
+		buf_free(&out);
+		return 0;
+	}
+	fclose(in_f);
+	out.size = (uint32_t)raw_sz;
+
+	if (read_u32(out.data + 0x00u) != CACHE_HEADER_SIGNATURE || read_s32(out.data + 0x04u) != CACHE_VERSION_XBOX)
+	{
+		buf_free(&out);
+		return 0;
+	}
+
+	buf_init(&state_buf, 16384u);
+	line_len = snprintf(line, sizeof(line),
+		"[OpenCE Forge Map]\r\n"
+		"ForgeSource=UserCreated\r\n"
+		"Map Name: %s\r\n"
+		"Base Map: %s\r\n"
+		"Author: OpenCE : Forge Creator\r\n"
+		"Objects Placed: %d\r\n"
+		"AI Squads: %d\r\n"
+		"[ForgeState]\r\n",
+		output_map_name,
+		base_stem,
+		edits ? (int)edits->placed_object_count : 0,
+		edits ? (int)edits->ai_spawn_count : 0);
+	if (line_len > 0 && state_buf.data)
+	{
+		uint32_t o = buf_alloc(&state_buf, (uint32_t)line_len, 1);
+		if (state_buf.data) memcpy(state_buf.data + o, line, (size_t)line_len);
+	}
+	if (edits)
+	{
+		for (i = 0; i < edits->default_edit_count; i++)
+		{
+			struct forge_default_object_edit const *de = &edits->default_edits[i];
+			if (!de->active)
+				continue;
+			line_len = snprintf(line, sizeof(line),
+				"DEFAULT_EDIT|%u|%d|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%s\r\n",
+				(unsigned)de->group_tag, (int)de->deleted,
+				de->orig_x, de->orig_y, de->orig_z,
+				de->new_x, de->new_y, de->new_z,
+				de->new_yaw, de->new_pitch, de->new_roll,
+				de->tag_path);
+			if (line_len > 0 && state_buf.data)
+			{
+				uint32_t o = buf_alloc(&state_buf, (uint32_t)line_len, 1);
+				if (state_buf.data) memcpy(state_buf.data + o, line, (size_t)line_len);
+			}
+		}
+		for (i = 0; i < edits->placed_object_count; i++)
+		{
+			struct forge_placed_object_entry const *po = &edits->placed_objects[i];
+			if (!po->tag_path[0] || po->x < -90000.0f)
+				continue;
+			line_len = snprintf(line, sizeof(line),
+				"OBJECT|%u|%d|0|%.4f|%.4f|%.4f|%.4f|%.4f|%.4f|%d|%s\r\n",
+				(unsigned)po->group_tag,
+				(int)po->source_cache_id,
+				po->x, po->y, po->z,
+				po->yaw, po->pitch, po->roll,
+				(int)po->team_index,
+				po->tag_path);
+			if (line_len > 0 && state_buf.data)
+			{
+				uint32_t o = buf_alloc(&state_buf, (uint32_t)line_len, 1);
+				if (state_buf.data) memcpy(state_buf.data + o, line, (size_t)line_len);
+			}
+		}
+		for (i = 0; i < edits->ai_spawn_count; i++)
+		{
+			struct forge_ai_spawn_entry const *ai = &edits->ai_spawns[i];
+			if (!ai->actor_variant_path[0])
+				continue;
+			line_len = snprintf(line, sizeof(line),
+				"AI|%.4f|%.4f|%.4f|%.4f|%d|%s\r\n",
+				ai->x, ai->y, ai->z, ai->yaw,
+				(int)ai->team_designator,
+				ai->actor_variant_path);
+			if (line_len > 0 && state_buf.data)
+			{
+				uint32_t o = buf_alloc(&state_buf, (uint32_t)line_len, 1);
+				if (state_buf.data) memcpy(state_buf.data + o, line, (size_t)line_len);
+			}
+		}
+	}
+
+	desc_len = (uint32_t)snprintf(desc_buf, sizeof(desc_buf),
+		"OpenCE : Forge Map: %s\r\n"
+		"Base Map: %s\r\n"
+		"Author: OpenCE : Forge Creator\r\n"
+		"Objects Placed: %d\r\n",
+		output_map_name,
+		base_stem,
+		edits ? (int)edits->placed_object_count : 0);
+
+	snprintf(custom_bmp_hint, sizeof(custom_bmp_hint), "OpenCE Forge/custom_bmp/%s.bmp", output_map_name);
+	bp = (struct forge_map_blueprint_data *)calloc(1, sizeof(*bp));
+	if (bp)
+	{
+		forge_load_map_blueprint(xbox_path, bp);
+		bmp_mem = build_blueprint_bmp_buffer(custom_bmp_hint, bp, edits, &bmp_size);
+		forge_free_map_blueprint(bp);
+		free(bp);
+		bp = NULL;
+	}
+
+	buf_alloc(&out, 0, 32);
+	if (state_buf.data && state_buf.size > 0)
+	{
+		state_size = state_buf.size;
+		state_foff = buf_alloc(&out, state_size + 1u, 4);
+		if (state_foff && out.data)
+		{
+			memcpy(out.data + state_foff, state_buf.data, state_size);
+			out.data[state_foff + state_size] = 0;
+		}
+	}
+	buf_free(&state_buf);
+
+	if (bmp_mem && bmp_size > 0)
+	{
+		bmp_foff = buf_alloc(&out, bmp_size, 4);
+		if (bmp_foff && out.data)
+			memcpy(out.data + bmp_foff, bmp_mem, bmp_size);
+		free(bmp_mem);
+	}
+
+	if (desc_len > 0)
+	{
+		desc_foff = buf_alloc(&out, desc_len + 1u, 4);
+		if (desc_foff && out.data)
+		{
+			memcpy(out.data + desc_foff, desc_buf, desc_len);
+			out.data[desc_foff + desc_len] = 0;
+		}
+	}
+
+	if (!out.data)
+		return 0;
+
+	memset(out.data + 0x20u, 0, 32);
+	snprintf((char *)(out.data + 0x20u), 32, "%s", output_map_name);
+	write_u32(out.data + 0x1E4u, state_foff);
+	write_u32(out.data + 0x1E8u, state_size);
+	write_u32(out.data + 0x1ECu, bmp_foff);
+	write_u32(out.data + 0x1F0u, bmp_size);
+	write_u32(out.data + 0x1F4u, desc_foff);
+	write_u32(out.data + 0x1F8u, desc_len);
+	write_u32(out.data + 0x1FCu, 0x464C4731u); /* 'FLG1' OpenCE : Forge map signature */
+
+	snprintf(map_path, sizeof(map_path), "custom_maps/%s.map", output_map_name);
+	out_f = fopen(map_path, "wb");
+	if (!out_f)
+	{
+		buf_free(&out);
+		return 0;
+	}
+	if (fwrite(out.data, 1, out.size, out_f) != out.size)
+	{
+		fclose(out_f);
+		buf_free(&out);
+		return 0;
+	}
+	fclose(out_f);
+	buf_free(&out);
+	return 1;
+}
+
 int forge_export_scenario_map(
 	char const *base_map_path,
 	char const *ce_res_dir,
@@ -7199,10 +7326,11 @@ int forge_export_scenario_map(
 #undef mkdir
 	FORGE_MKDIR("custom_maps");
 
-	/* Ensure we open a Custom Edition (v609) base map container matching the current map (never substituting a different map's BSP!) */
+	/* Ensure we open a Custom Edition (v609) base map container matching the current map (or fall back to OpenCE's Xbox v5 map) */
 	if (!forge_source_map_open(base_map_path, &base_map) || base_map.version != CACHE_VERSION_CE)
 	{
 		char want_file[128];
+		char h_xbox[160];
 		char cand_path[512];
 		forge_extract_basename(base_map_path, want_file, sizeof(want_file));
 		if (base_map.data)
@@ -7210,15 +7338,16 @@ int forge_export_scenario_map(
 		if (!want_file[0])
 			snprintf(want_file, sizeof(want_file), "bloodgulch.map");
 
-		snprintf(cand_path, sizeof(cand_path), "OpenCE Forge/forge_maps/%s", want_file);
+		snprintf(h_xbox, sizeof(h_xbox), "h:\\maps\\%s", want_file);
+		platform_translate_path(h_xbox, cand_path, sizeof(cand_path));
 		if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
 		{
 			if (base_map.data) forge_source_map_close(&base_map);
-			snprintf(cand_path, sizeof(cand_path), "../FORGE CODE/GAME MAPS/CUSTOM EDITION DEFAULT MAPS/%s", want_file);
+			snprintf(cand_path, sizeof(cand_path), "C:/Program Files (x86)/Microsoft Games/Halo Custom Edition/maps/%s", want_file);
 			if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
 			{
 				if (base_map.data) forge_source_map_close(&base_map);
-				snprintf(cand_path, sizeof(cand_path), "FORGE CODE/GAME MAPS/CUSTOM EDITION DEFAULT MAPS/%s", want_file);
+				snprintf(cand_path, sizeof(cand_path), "C:/Program Files/Microsoft Games/Halo Custom Edition/maps/%s", want_file);
 				if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
 				{
 					if (base_map.data) forge_source_map_close(&base_map);
@@ -7226,7 +7355,7 @@ int forge_export_scenario_map(
 					if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
 					{
 						if (base_map.data) forge_source_map_close(&base_map);
-						return 0;
+						return forge_build_xbox_flg1_map(want_file, base_map_path, output_map_name, edits);
 					}
 				}
 			}
@@ -7812,7 +7941,7 @@ int forge_export_scenario_map(
 			"ForgeSource=UserCreated\r\n"
 			"Map Name: %s\r\n"
 			"Base Map: %s\r\n"
-			"Author: OpenCE Forge Creator\r\n"
+			"Author: OpenCE : Forge Creator\r\n"
 			"Objects Placed: %d\r\n"
 			"AI Squads: %d\r\n",
 			output_map_name,
@@ -7913,9 +8042,9 @@ int forge_export_scenario_map(
 		}
 
 		desc_len = (uint32_t)snprintf(desc_buf, sizeof(desc_buf),
-			"OpenCE Forge Map: %s\r\n"
+			"OpenCE : Forge Map: %s\r\n"
 			"Base Map: %s\r\n"
-			"Author: OpenCE Forge Creator\r\n"
+			"Author: OpenCE : Forge Creator\r\n"
 			"Objects Placed: %d\r\n",
 			output_map_name,
 			base_map.map_name,
@@ -7990,7 +8119,7 @@ int forge_export_scenario_map(
 		write_u32(out.data + 0x1F0u, bmp_size);
 		write_u32(out.data + 0x1F4u, desc_foff);
 		write_u32(out.data + 0x1F8u, desc_len);
-		write_u32(out.data + 0x1FCu, 0x464C4731u); /* 'FLG1' OpenCE Forge map signature */
+		write_u32(out.data + 0x1FCu, 0x464C4731u); /* 'FLG1' OpenCE : Forge map signature */
 		write_u32(out.data + 0x7FCu, CACHE_FOOTER_SIGNATURE);
 
 		/* Update Custom Edition CRC-32 checksum (+0x64) across BSPs + model data + tag data */

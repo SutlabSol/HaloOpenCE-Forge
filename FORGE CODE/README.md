@@ -29,12 +29,11 @@ OpenCE Forge is a standalone, non-destructive 3D Forge World Editor and Multipla
     ├── build_forge.py                    # Build & packaging script
     ├── include/
     │   ├── forge_cache_builder.h         # Tag cloner, cache builder, custom tag extractor, map exporter
-    │   ├── forge_engine.h                # 2D Blueprint, 3D Monitor/Grab/Palette, and Network sync APIs
+    │   ├── forge_engine.h                # 3D Monitor/Grab/Palette and Network sync APIs
     │   └── forge_net_override.h          # Forge network version isolation header
     ├── src/
     │   ├── forge_cache_builder.c         # Schema-driven tag cloner, bitmap/sound internalizer, credits writer, exporter
     │   ├── forge_runtime_tags.c          # First-launch local tag cache builder & runtime .ftag / bitmap shader loader
-    │   ├── forge_blueprint_2d.c          # 2D Top-Down Blueprint Editor
     │   ├── forge_3d_mode.c               # 3D In-Engine Forge Mode, Physics Beam, 3D Preview, and Spawn Menu
     │   ├── forge_ai.c                    # Engine AI support
     │   ├── forge_network.c               # Forge Lobby Isolation & Multiplayer 3D Entity Replication

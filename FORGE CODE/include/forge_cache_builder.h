@@ -152,7 +152,7 @@ struct forge_scenario_edit_state
 	struct forge_default_object_edit default_edits[FORGE_MAX_DEFAULT_OBJECT_EDITS];
 };
 
-/* Summary of a map's 2D floorplan & existing placements for 2D Blueprint Mode */
+/* Summary of a map's 2D floorplan & existing placements (read by the map exporter) */
 struct forge_bsp_edge_2d
 {
 	float x0, y0, z0;

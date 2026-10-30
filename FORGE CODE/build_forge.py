@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-Build & Packaging script for OpenCE Forge ("HaloCE Forge.exe") and Forge Asset Compiler.
-Packages the complete standard OpenCE Windows release plus the drop-in OpenCE Forge Add-On
-inside:
+Build & Packaging script for OpenCE Forge ("halo.exe") and Forge Asset Compiler.
+Packages the complete OpenCE Forge Windows release inside:
   C:\\Users\\LeviB\\Projects\\OpenCE-Forge\\OpenCE Build\\
-Strictly leaves all upstream files in source/ and port/ untouched.
 """
 
 import ctypes
@@ -1332,7 +1330,6 @@ def generate_customizable_forge_ui_assets(forge_addon_dir: Path) -> None:
     print(f"[build_forge] Ensured customizable Forge UI XML & PNG backgrounds in: {ui_dir}")
 
 
-
 def build_asset_compiler() -> Path:
     clang = find_llvm_tool("clang")
     game_cflags, _ = get_cflags_sets()
@@ -1385,7 +1382,11 @@ def package_opence_build_folder(haloce_forge_exe: Path) -> None:
     standard_files = [
         (ROOT_DIR / "build/windows/halo.exe", OPENCE_BUILD_DIR / "halo.exe"),
         (ROOT_DIR / "build/windows/SDL3.dll", OPENCE_BUILD_DIR / "SDL3.dll"),
+        (ROOT_DIR / "LICENSE", OPENCE_BUILD_DIR / "LICENSE.txt"),
         (ROOT_DIR / "port/assets/network/brokers.txt", OPENCE_BUILD_DIR / "brokers.txt"),
+        (ROOT_DIR / "port/assets/network/masters.txt", OPENCE_BUILD_DIR / "masters.txt"),
+        (ROOT_DIR / "deploy/init.txt.example", OPENCE_BUILD_DIR / "init.txt.example"),
+        (ROOT_DIR / "port/third_party/jsmn/LICENSE", OPENCE_BUILD_DIR / "jsmn-LICENSE.txt"),
         (ROOT_DIR / "port/third_party/extract-xiso/LICENSE.TXT", OPENCE_BUILD_DIR / "extract-xiso-LICENSE.txt"),
         (ROOT_DIR / "port/third_party/mbedtls/LICENSE", OPENCE_BUILD_DIR / "mbedtls-LICENSE.txt"),
         (ROOT_DIR / "port/third_party/miniupnpc/LICENSE", OPENCE_BUILD_DIR / "miniupnpc-LICENSE.txt"),
@@ -1397,6 +1398,8 @@ def package_opence_build_folder(haloce_forge_exe: Path) -> None:
     for src, dst in standard_files:
         if src.is_file():
             shutil.copy2(src, dst)
+    if (ROOT_DIR / "deploy/gametypes").is_dir():
+        shutil.copytree(ROOT_DIR / "deploy/gametypes", OPENCE_BUILD_DIR / "gametypes", dirs_exist_ok=True)
 
     # 2. Populate standard `maps/` folder inside `OpenCE Build/maps/` if Xbox maps exist
     xbox_maps_src = FORGE_DIR / "GAME MAPS" / "XBOX MAPS"
@@ -1496,7 +1499,8 @@ def package_opence_build_folder(haloce_forge_exe: Path) -> None:
                     comp_payload = zlib.compress(raw_mp[0x800:], 6)
                     dst_mp.write_bytes(raw_mp[:0x800] + comp_payload)
 
-    generate_forge_menus(forge_addon_dir)
+    if (forge_addon_dir / "menus").is_dir():
+        shutil.rmtree(forge_addon_dir / "menus")
     generate_customizable_forge_ui_assets(forge_addon_dir)
 
     # Ensure OpenCE Forge/cached_tags/markers and OpenCE Forge/cached_tags/xbox_cache exist
@@ -1531,7 +1535,11 @@ def package_opence_build_folder(haloce_forge_exe: Path) -> None:
     if ac_exe.is_file():
         shutil.copy2(ac_exe, forge_tools_dir / "forge_asset_compiler.exe")
 
-    # Clean up old root-level build artifacts so everything is cleanly inside `OpenCE Build/`
+    # Clean up old root-level and legacy build artifacts so everything is cleanly inside `OpenCE Build/` as `halo.exe`
+    for legacy_f in ("HaloCE Forge.exe", "HaloCE Forge.pdb"):
+        lf = OPENCE_BUILD_DIR / legacy_f
+        if lf.is_file():
+            lf.unlink()
     for stray_file in ("HaloCE Forge.exe", "HaloCE Forge.pdb", "halo.exe", "SDL3.dll", "brokers.txt"):
         p = ROOT_DIR / stray_file
         if p.is_file():
@@ -1540,536 +1548,6 @@ def package_opence_build_folder(haloce_forge_exe: Path) -> None:
         d = ROOT_DIR / stray_dir
         if d.is_dir():
             shutil.rmtree(d)
-
-
-def _compute_ce_map_checksum(data: bytes | bytearray, tag_off: int, scnr_foff: int) -> int:
-    crc = 0
-    if scnr_foff + 0x5B0 <= len(data):
-        bsp_cnt, bsp_addr = struct.unpack_from("<iI", data, scnr_foff + 0x5A4)
-        if 0 < bsp_cnt <= 32 and bsp_addr >= 0x40440000:
-            barr_foff = tag_off + (bsp_addr - 0x40440000)
-            for i in range(bsp_cnt):
-                beo = barr_foff + i * 32
-                if beo + 32 <= len(data):
-                    boff, bsz = struct.unpack_from("<II", data, beo)
-                    if boff >= 0x800 and boff + bsz <= len(data):
-                        crc = zlib.crc32(memoryview(data)[boff : boff + bsz], crc)
-    vtx_off = struct.unpack_from("<I", data, tag_off + 0x14)[0]
-    model_sz = struct.unpack_from("<I", data, tag_off + 0x20)[0]
-    if vtx_off >= 0x800 and vtx_off + model_sz <= len(data):
-        crc = zlib.crc32(memoryview(data)[vtx_off : vtx_off + model_sz], crc)
-    tag_sz = struct.unpack_from("<I", data, 0x14)[0]
-    if tag_off + tag_sz <= len(data):
-        crc = zlib.crc32(memoryview(data)[tag_off : tag_off + tag_sz], crc)
-    return (~crc) & 0xFFFFFFFF
-
-
-def sanitize_cached_ftags_and_baked_maps(forge_addon_dir: Path) -> None:
-    """
-    Ensures every .ftag in `OpenCE Forge/cached_tags/` and any baked Forge .map in `custom_maps/`
-    has OpenCE-compliant uncompressed vertex node indices (nodes[0]=0, nodes[1]=0), clamped unit vectors,
-    and valid object.type (+0x00) / object.flags (+0x02).
-    """
-    cached_root = forge_addon_dir / "cached_tags"
-    ftag_fixed = 0
-    for ftag_path in sorted(cached_root.rglob("*.ftag")):
-        raw = bytearray(ftag_path.read_bytes())
-        if len(raw) < 276 or raw[:4] != b"FTAG":
-            continue
-        pcnt = struct.unpack_from("<I", raw, 272)[0]
-        off = 276
-        changed = False
-        for _ in range(pcnt):
-            if off + 136 > len(raw):
-                break
-            vc, tc = struct.unpack_from("<ii", raw, off)
-            off += 136
-            if vc <= 0 or tc <= 0 or off + vc * 68 + (tc + 2) * 2 > len(raw):
-                break
-            for vi in range(vc):
-                vo = off + vi * 68
-                n0, n1, w0, w1 = struct.unpack_from("<hhff", raw, vo + 56)
-                if n0 != 0 or n1 != 0 or w0 != 1.0 or w1 != 0.0:
-                    struct.pack_into("<hhff", raw, vo + 56, 0, 0, 1.0, 0.0)
-                    changed = True
-                vecs = list(struct.unpack_from("<9f", raw, vo + 12))
-                vec_mod = False
-                for ci in range(9):
-                    v = vecs[ci]
-                    if not (-1.0 <= v <= 1.0):
-                        vecs[ci] = 1.0 if (ci % 3 == 0) else 0.0
-                        vec_mod = True
-                if vecs[0] == 0.0 and vecs[1] == 0.0 and vecs[2] == 0.0:
-                    vecs[2] = 1.0
-                    vec_mod = True
-                if vec_mod:
-                    struct.pack_into("<9f", raw, vo + 12, *vecs)
-                    changed = True
-            off += vc * 68 + (tc + 2) * 2
-        if changed:
-            ftag_path.write_bytes(raw)
-            ftag_fixed += 1
-
-    if ftag_fixed > 0:
-        print(f"[build_forge] Sanitized vertex node indices & normals in {ftag_fixed} cached .ftag files")
-
-    custom_maps_dir = forge_addon_dir.parent / "custom_maps"
-    if not custom_maps_dir.is_dir():
-        return
-    obj_type_by_grp = {
-        "bipd": 0,
-        "vehi": 1,
-        "weap": 2,
-        "eqip": 3,
-        "garb": 4,
-        "proj": 5,
-        "scen": 6,
-        "mach": 7,
-        "ctrl": 8,
-        "lifi": 9,
-    }
-    for mp in sorted(custom_maps_dir.glob("*.map")):
-        if mp.stat().st_size < 0x800 or mp.stat().st_size > 120 * 1024 * 1024:
-            continue
-        hdr = mp.read_bytes()[:0x800]
-        if struct.unpack_from("<I", hdr, 0x1FC)[0] != 0x464C4731:
-            continue
-        mdata = bytearray(mp.read_bytes())
-        tag_off, tag_sz = struct.unpack_from("<II", mdata, 0x10)
-        if tag_off < 0x800 or tag_off + tag_sz > len(mdata):
-            continue
-        tag_cnt = struct.unpack_from("<i", mdata, tag_off + 0x0C)[0]
-        vtx_off = struct.unpack_from("<I", mdata, tag_off + 0x14)[0]
-        scnr_foff = tag_off + 0x28 + tag_cnt * 32
-        modified = False
-        for i in range(tag_cnt):
-            to = tag_off + 0x28 + i * 32
-            if to + 32 > len(mdata):
-                break
-            grp_s = mdata[to : to + 4][::-1].decode("latin1", errors="ignore")
-            naddr, daddr = struct.unpack_from("<II", mdata, to + 0x10)
-            if daddr < 0x40440000:
-                continue
-            doff = tag_off + (daddr - 0x40440000)
-            if grp_s == "scnr":
-                scnr_foff = doff
-            elif grp_s in obj_type_by_grp and doff + 4 <= len(mdata):
-                exp_t = obj_type_by_grp[grp_s]
-                cur_t, cur_f = struct.unpack_from("<hH", mdata, doff)
-                if cur_t != exp_t:
-                    struct.pack_into("<hH", mdata, doff, exp_t, cur_f | 1)
-                    modified = True
-            elif grp_s == "mod2" and naddr >= 0x40440000:
-                noff = tag_off + (naddr - 0x40440000)
-                end_n = mdata.find(b"\x00", noff)
-                tname = mdata[noff:end_n].decode("latin1", errors="ignore") if end_n != -1 else ""
-                if "baked_mod2" in tname and doff + 0xE8 <= len(mdata):
-                    gcnt, gptr = struct.unpack_from("<iI", mdata, doff + 0xD0)
-                    if gcnt > 0 and gptr >= 0x40440000:
-                        goff = tag_off + (gptr - 0x40440000)
-                        pcnt, pptr = struct.unpack_from("<iI", mdata, goff + 0x24)
-                        if pcnt > 0 and pptr >= 0x40440000:
-                            poff = tag_off + (pptr - 0x40440000)
-                            for p in range(pcnt):
-                                po = poff + p * 132
-                                vcnt = struct.unpack_from("<i", mdata, po + 0x58)[0]
-                                pvoff = struct.unpack_from("<I", mdata, po + 0x64)[0]
-                                vo_base = vtx_off + pvoff
-                                if vcnt > 0 and vo_base + vcnt * 68 <= len(mdata):
-                                    for vi in range(vcnt):
-                                        vo = vo_base + vi * 68
-                                        n0, n1 = struct.unpack_from("<hh", mdata, vo + 56)
-                                        if n0 < 0 or n1 < 0:
-                                            struct.pack_into("<hhff", mdata, vo + 56, 0, 0, 1.0, 0.0)
-                                            modified = True
-        if modified:
-            new_crc = _compute_ce_map_checksum(mdata, tag_off, scnr_foff)
-            struct.pack_into("<I", mdata, 0x64, new_crc)
-            mp.write_bytes(mdata)
-            print(f"[build_forge] Repaired baked Forge map: {mp.name} (updated CRC 0x{new_crc:08X})")
-
-
-
-def _extract_shader_diffuse_bitmap_name(
-    tag_buf: bytes,
-    inst_off: int,
-    tag_count: int,
-    shdr_grp: str,
-    shdr_data_addr: int,
-) -> str:
-    tag_sz = len(tag_buf)
-    if shdr_data_addr < 0x40440000 or shdr_data_addr >= 0x40440000 + tag_sz:
-        return ""
-    s_off = shdr_data_addr - 0x40440000
-    # Primary base_map offsets first: 0xA4 for 'soso' (shader_model), 0x88 for 'senv' (shader_environment)
-    cand_offsets: list[int] = []
-    if shdr_grp == "soso":
-        cand_offsets.append(0xA4)
-    elif shdr_grp == "senv":
-        cand_offsets.append(0x88)
-    for disp in range(0x28, 0x160, 4):
-        if disp not in cand_offsets:
-            cand_offsets.append(disp)
-
-    for disp in cand_offsets:
-        if s_off + disp + 16 > tag_sz:
-            continue
-        r_grp, r_name_addr, _, r_idx = struct.unpack_from("<IIIi", tag_buf, s_off + disp)
-        if r_grp == 0x6269746D and r_idx != -1:
-            bname = ""
-            if 0x40440000 <= r_name_addr < 0x40440000 + tag_sz:
-                end_n = tag_buf.find(b"\x00", r_name_addr - 0x40440000)
-                if end_n != -1:
-                    bname = tag_buf[r_name_addr - 0x40440000 : end_n].decode("latin1", errors="ignore")
-            if not bname and 0 <= (r_idx & 0xFFFF) < tag_count:
-                tio = inst_off + (r_idx & 0xFFFF) * 32
-                if tio + 32 <= tag_sz:
-                    (_, _, _, _, b_name_addr, _) = struct.unpack_from("<IIIIII", tag_buf, tio)
-                    if 0x40440000 <= b_name_addr < 0x40440000 + tag_sz:
-                        end_n = tag_buf.find(b"\x00", b_name_addr - 0x40440000)
-                        if end_n != -1:
-                            bname = tag_buf[b_name_addr - 0x40440000 : end_n].decode("latin1", errors="ignore")
-            if bname and "cubemap" not in bname.lower() and "multipurpose" not in bname.lower() and "vector" not in bname.lower():
-                return bname
-    return ""
-
-
-def _extract_ftag_from_cache(
-    f_data: bytes,
-    tag_buf: bytes,
-    inst_off: int,
-    tag_count: int,
-    vertex_data_off: int,
-    index_data_rel_off: int,
-    grp_str: str,
-    tag_path: str,
-    mod_data_addr: int,
-    is_gbxmodel: int,
-    radius: float,
-    out_ftag: Path,
-    shader_bitmaps: dict[str, str] | None = None,
-) -> bool:
-    tag_sz = len(tag_buf)
-    if mod_data_addr < 0x40440000 or (mod_data_addr - 0x40440000) + 232 > tag_sz:
-        return False
-    mod_off = mod_data_addr - 0x40440000
-    u_scale, v_scale = struct.unpack_from("<ff", tag_buf, mod_off + 0x30)
-    if not (0.0001 < u_scale < 10000.0):
-        u_scale = 1.0
-    if not (0.0001 < v_scale < 10000.0):
-        v_scale = 1.0
-    reg_count, reg_addr = struct.unpack_from("<iI", tag_buf, mod_off + 196)
-    geom_count, geom_addr = struct.unpack_from("<iI", tag_buf, mod_off + 208)
-    shdr_count, shdr_addr = struct.unpack_from("<iI", tag_buf, mod_off + 220)
-    if geom_count <= 0 or geom_addr < 0x40440000 or (geom_addr - 0x40440000) + geom_count * 48 > tag_sz:
-        return False
-
-    geom_list: list[int] = []
-    if 0 < reg_count <= 32 and reg_addr >= 0x40440000 and (reg_addr - 0x40440000) + reg_count * 76 <= tag_sz:
-        for r in range(reg_count):
-            r_off = (reg_addr - 0x40440000) + r * 76
-            perm_count, perm_addr = struct.unpack_from("<iI", tag_buf, r_off + 64)
-            if perm_count > 0 and perm_addr >= 0x40440000 and (perm_addr - 0x40440000) + 88 <= tag_sz:
-                perm0_off = perm_addr - 0x40440000
-                for lod in range(4, -1, -1):
-                    (gi,) = struct.unpack_from("<h", tag_buf, perm0_off + 64 + lod * 2)
-                    if 0 <= gi < geom_count:
-                        geom_list.append(gi)
-                        break
-    if not geom_list:
-        geom_list = [0]
-
-    part_stride = 132 if is_gbxmodel else 104
-    parts_out: list[tuple[int, int, bytes, bytes, bytes]] = []
-    for g_idx in geom_list:
-        g_off = (geom_addr - 0x40440000) + g_idx * 48
-        part_count, part_addr = struct.unpack_from("<iI", tag_buf, g_off + 36)
-        if part_count <= 0 or part_addr < 0x40440000 or (part_addr - 0x40440000) + part_count * part_stride > tag_sz:
-            continue
-        for p in range(part_count):
-            if len(parts_out) >= 24:
-                break
-            p_off = (part_addr - 0x40440000) + p * part_stride
-            (shdr_idx,) = struct.unpack_from("<h", tag_buf, p_off + 4)
-            tri_count, tri_file_off = struct.unpack_from("<iI", tag_buf, p_off + 72)
-            (vtx_count,) = struct.unpack_from("<i", tag_buf, p_off + 88)
-            (vtx_file_off,) = struct.unpack_from("<I", tag_buf, p_off + 100)
-            if tri_count <= 0 or vtx_count <= 0 or tri_count > 32768 or vtx_count > 32768:
-                continue
-
-            shader_hint = ""
-            if 0 <= shdr_idx < shdr_count and shdr_addr >= 0x40440000 and (shdr_addr - 0x40440000) + (shdr_idx + 1) * 32 <= tag_sz:
-                s_off = (shdr_addr - 0x40440000) + shdr_idx * 32
-                (s_name_addr,) = struct.unpack_from("<I", tag_buf, s_off + 4)
-                if 0x40440000 <= s_name_addr < 0x40440000 + tag_sz:
-                    end_nul = tag_buf.find(b"\x00", s_name_addr - 0x40440000)
-                    if end_nul != -1:
-                        shader_hint = tag_buf[s_name_addr - 0x40440000 : end_nul].decode("latin1", errors="ignore")
-                        if shader_bitmaps and shader_hint.lower() in shader_bitmaps:
-                            bmp_name = shader_bitmaps[shader_hint.lower()]
-                            if bmp_name:
-                                shader_hint = f"{shader_hint}|{bmp_name}|{u_scale:.4f},{v_scale:.4f}"
-                            else:
-                                shader_hint = f"{shader_hint}||{u_scale:.4f},{v_scale:.4f}"
-                        else:
-                            shader_hint = f"{shader_hint}||{u_scale:.4f},{v_scale:.4f}"
-
-            uncomp_sz = vtx_count * 68
-            idx_sz = (tri_count + 2) * 2
-            if vtx_file_off >= 0x40440000 and (vtx_file_off - 0x40440000) + uncomp_sz <= tag_sz:
-                v_raw = bytearray(tag_buf[vtx_file_off - 0x40440000 : vtx_file_off - 0x40440000 + uncomp_sz])
-            elif vertex_data_off + vtx_file_off + uncomp_sz <= len(f_data):
-                v_raw = bytearray(f_data[vertex_data_off + vtx_file_off : vertex_data_off + vtx_file_off + uncomp_sz])
-            else:
-                continue
-
-            for vi in range(vtx_count):
-                vo = vi * 68
-                vecs = list(struct.unpack_from("<9f", v_raw, vo + 12))
-                for ci in range(9):
-                    val = vecs[ci]
-                    if not (-1.0 <= val <= 1.0):
-                        vecs[ci] = 1.0 if (ci % 3 == 0) else 0.0
-                if vecs[0] == 0.0 and vecs[1] == 0.0 and vecs[2] == 0.0:
-                    vecs[2] = 1.0
-                struct.pack_into("<9f", v_raw, vo + 12, *vecs)
-                struct.pack_into("<hhff", v_raw, vo + 56, 0, 0, 1.0, 0.0)
-            v_bytes = bytes(v_raw)
-
-            idx_base = vertex_data_off + index_data_rel_off
-            if tri_file_off >= 0x40440000 and (tri_file_off - 0x40440000) + idx_sz <= tag_sz:
-                i_bytes = tag_buf[tri_file_off - 0x40440000 : tri_file_off - 0x40440000 + idx_sz]
-            elif idx_base + tri_file_off + idx_sz <= len(f_data):
-                i_bytes = f_data[idx_base + tri_file_off : idx_base + tri_file_off + idx_sz]
-            else:
-                continue
-
-            sh_bytes = shader_hint.encode("ascii", errors="ignore")[:127].ljust(128, b"\x00")
-            parts_out.append((vtx_count, tri_count, sh_bytes, v_bytes, i_bytes))
-
-    if not parts_out:
-        return False
-
-    out_ftag.parent.mkdir(parents=True, exist_ok=True)
-    grp_int = (ord(grp_str[0]) << 24) | (ord(grp_str[1]) << 16) | (ord(grp_str[2]) << 8) | ord(grp_str[3])
-    tname_bytes = tag_path.encode("ascii", errors="ignore")[:255].ljust(256, b"\x00")
-    with out_ftag.open("wb") as wf:
-        wf.write(b"FTAG")
-        wf.write(struct.pack("<IIf", 1, grp_int, radius if 0.05 < radius < 100.0 else 1.5))
-        wf.write(tname_bytes)
-        wf.write(struct.pack("<I", len(parts_out)))
-        for vtx_c, tri_c, sh_b, v_b, i_b in parts_out:
-            wf.write(struct.pack("<ii", vtx_c, tri_c))
-            wf.write(sh_b)
-            wf.write(v_b)
-            wf.write(i_b)
-    return True
-
-
-def generate_cached_tags_folder(forge_addon_dir: Path) -> None:
-    """
-    Populates `OpenCE Forge/cached_tags/` by pulling every Forge-placeable tag
-    (weapons, vehicles, scenery, devices) and its 3D model + diffuse texture hint
-    from:
-      1. All 10 Campaign maps (`FORGE CODE/GAME MAPS/PC MAPS/a10.map` .. `d40.map`)
-      2. All 19 Default Multiplayer maps (`CUSTOM EDITION DEFAULT MAPS/` & `PC MAPS/`)
-      3. `OpenCE Forge/forge_maps/forgeasset.map`
-      4. `OpenCE Forge/forge_maps/customforgeasset.map`
-    """
-    cached_root = forge_addon_dir / "cached_tags"
-    for sub in ("scenery", "vehicles", "weapons", "bipeds", "devices", "ai"):
-        (cached_root / sub).mkdir(parents=True, exist_ok=True)
-
-    # Point 3: Exclude bipeds ('bipd') and AI ('actv') from the spawn catalog
-    cat_map = {
-        "weap": (0, "weapons"),
-        "vehi": (1, "vehicles"),
-        "scen": (3, "scenery"),
-        "mach": (4, "devices"),
-        "ctrl": (4, "devices"),
-        "lifi": (4, "devices"),
-    }
-    shader_grps = {"soso", "senv", "sgla", "schi", "scex", "swat", "smet", "spla", "sotr"}
-
-    catalog_lines: list[str] = [
-        "# OpenCE Forge Cached Tag Folder System Manifest",
-        "# Format: <group_tag>|<category_id>|<source_cache_id>|<tag_path>",
-    ]
-    seen_catalog_keys: set[tuple[str, str]] = set()
-    extracted_ftags: set[Path] = set()
-    shader_bitmaps: dict[str, str] = {}
-
-    # Collect all source maps: Campaign + Default MP maps FIRST (they contain complete shader & bitmap tables),
-    # followed by forgeasset.map and customforgeasset.map!
-    source_maps: list[tuple[int, Path]] = []
-
-    pc_maps_dir = FORGE_DIR / "GAME MAPS" / "PC MAPS"
-    if pc_maps_dir.is_dir():
-        for mp in sorted(pc_maps_dir.glob("*.map")):
-            if mp.name.lower() not in ("bitmaps.map", "sounds.map", "loc.map", "ui.map"):
-                source_maps.append((0, mp))
-
-    ce_maps_dir = FORGE_DIR / "GAME MAPS" / "CUSTOM EDITION DEFAULT MAPS"
-    if ce_maps_dir.is_dir():
-        for mp in sorted(ce_maps_dir.glob("*.map")):
-            if mp.name.lower() not in ("bitmaps.map", "sounds.map", "loc.map", "ui.map"):
-                source_maps.append((0, mp))
-
-    fa_path = forge_addon_dir / "forge_maps" / "forgeasset.map"
-    if fa_path.is_file():
-        source_maps.append((0, fa_path))
-
-    cfa_path = forge_addon_dir / "forge_maps" / "customforgeasset.map"
-    if cfa_path.is_file():
-        source_maps.append((1, cfa_path))
-
-    # PASS 1: Collect all shader -> diffuse bitmap mappings across every Campaign and MP map first!
-    for _, map_path in source_maps:
-        if not map_path.is_file():
-            continue
-        f_data = map_path.read_bytes()
-        if len(f_data) < 2048:
-            continue
-        tag_off, tag_sz = struct.unpack_from("<II", f_data, 0x10)
-        if tag_off < 2048 or tag_off + tag_sz > len(f_data):
-            continue
-        tag_buf = f_data[tag_off : tag_off + tag_sz]
-        inst_addr, _, _, tag_count = struct.unpack_from("<IIII", tag_buf, 0)
-        if inst_addr < 0x40440000 or tag_count <= 0 or tag_count > 16384:
-            continue
-        inst_off = inst_addr - 0x40440000
-        for i in range(tag_count):
-            io = inst_off + i * 32
-            if io + 32 > tag_sz:
-                break
-            grp_u32, _, _, _, name_addr, data_addr = struct.unpack_from("<IIIIII", tag_buf, io)
-            grp_s = struct.pack(">I", grp_u32).decode("latin1", errors="ignore")
-            if grp_s in shader_grps and 0x40440000 <= name_addr < 0x40440000 + tag_sz:
-                end_n = tag_buf.find(b"\x00", name_addr - 0x40440000)
-                if end_n != -1:
-                    tname = tag_buf[name_addr - 0x40440000 : end_n].decode("latin1", errors="ignore").lower()
-                    if tname and tname not in shader_bitmaps:
-                        bmp_name = _extract_shader_diffuse_bitmap_name(tag_buf, inst_off, tag_count, grp_s, data_addr)
-                        if bmp_name:
-                            shader_bitmaps[tname] = bmp_name
-
-    monitor_extracted = False
-
-    # PASS 2: Extract .ftag files with complete shader|bitmap hints
-    for src_id, map_path in source_maps:
-        if not map_path.is_file():
-            continue
-        f_data = map_path.read_bytes()
-        if len(f_data) < 2048:
-            continue
-        tag_off, tag_sz = struct.unpack_from("<II", f_data, 0x10)
-        if tag_off < 2048 or tag_off + tag_sz > len(f_data):
-            continue
-        tag_buf = f_data[tag_off : tag_off + tag_sz]
-        inst_addr, _, _, tag_count, _, vertex_data_off, _, index_data_rel_off = struct.unpack_from("<IIIIIIII", tag_buf, 0)
-        if inst_addr < 0x40440000 or tag_count <= 0 or tag_count > 16384:
-            continue
-        inst_off = inst_addr - 0x40440000
-
-        models_by_idx: dict[int, tuple[int, int]] = {}
-        models_by_name: dict[str, tuple[int, int]] = {}
-        for i in range(tag_count):
-            io = inst_off + i * 32
-            if io + 32 > tag_sz:
-                break
-            grp_u32, _, _, _, name_addr, data_addr = struct.unpack_from("<IIIIII", tag_buf, io)
-            grp_s = struct.pack(">I", grp_u32).decode("latin1", errors="ignore")
-            if 0x40440000 <= name_addr < 0x40440000 + tag_sz:
-                end_n = tag_buf.find(b"\x00", name_addr - 0x40440000)
-                tname = tag_buf[name_addr - 0x40440000 : end_n].decode("latin1", errors="ignore") if end_n != -1 else ""
-            else:
-                tname = ""
-            if grp_s in ("mod2", "mode"):
-                is_gbx = 1 if grp_s == "mod2" else 0
-                models_by_idx[i] = (data_addr, is_gbx)
-                if tname:
-                    models_by_name[tname.lower()] = (data_addr, is_gbx)
-
-        # Extract 343 Guilty Spark ('characters\monitor\monitor') into bipeds/characters_monitor_monitor.ftag for Monitor mode
-        if not monitor_extracted and "characters\\monitor\\monitor" in models_by_name:
-            m_addr, m_gbx = models_by_name["characters\\monitor\\monitor"]
-            if _extract_ftag_from_cache(
-                f_data, tag_buf, inst_off, tag_count, vertex_data_off, index_data_rel_off,
-                "bipd", "characters\\monitor\\monitor", m_addr, m_gbx, 1.0,
-                cached_root / "bipeds" / "characters_monitor_monitor.ftag",
-                shader_bitmaps,
-            ):
-                monitor_extracted = True
-
-        for i in range(tag_count):
-            io = inst_off + i * 32
-            if io + 32 > tag_sz:
-                break
-            grp_u32, _, _, _, name_addr, data_addr = struct.unpack_from("<IIIIII", tag_buf, io)
-            grp_s = struct.pack(">I", grp_u32).decode("latin1", errors="ignore")
-            if grp_s not in cat_map:
-                continue
-            if not (0x40440000 <= name_addr < 0x40440000 + tag_sz):
-                continue
-            end_n = tag_buf.find(b"\x00", name_addr - 0x40440000)
-            if end_n == -1:
-                continue
-            tname = tag_buf[name_addr - 0x40440000 : end_n].decode("latin1", errors="ignore")
-            if not tname:
-                continue
-            tname_low = tname.lower()
-            if grp_s == "weap" and (
-                "flag" in tname_low
-                or "ball" in tname_low
-                or "target_laser" in tname_low
-                or "double_speed" in tname_low
-            ):
-                continue
-
-            cat_id, sub_folder = cat_map[grp_s]
-            slug = "".join("_" if c in "\\/ :" else c for c in tname)
-            out_ftag = cached_root / sub_folder / f"{slug}.ftag"
-
-            if out_ftag not in extracted_ftags and data_addr >= 0x40440000 and (data_addr - 0x40440000) + 0x38 <= tag_sz:
-                obj_off = data_addr - 0x40440000
-                (rad,) = struct.unpack_from("<f", tag_buf, obj_off + 0x04)
-                (mod_name_addr,) = struct.unpack_from("<I", tag_buf, obj_off + 0x2C)
-                (mod_idx,) = struct.unpack_from("<i", tag_buf, obj_off + 0x34)
-                mod_info = None
-                if mod_idx != -1 and (mod_idx & 0xFFFF) in models_by_idx:
-                    mod_info = models_by_idx[mod_idx & 0xFFFF]
-                elif 0x40440000 <= mod_name_addr < 0x40440000 + tag_sz:
-                    en2 = tag_buf.find(b"\x00", mod_name_addr - 0x40440000)
-                    if en2 != -1:
-                        mname = tag_buf[mod_name_addr - 0x40440000 : en2].decode("latin1", errors="ignore").lower()
-                        mod_info = models_by_name.get(mname)
-                if mod_info:
-                    if _extract_ftag_from_cache(
-                        f_data, tag_buf, inst_off, tag_count, vertex_data_off, index_data_rel_off,
-                        grp_s, tname, mod_info[0], mod_info[1], rad, out_ftag, shader_bitmaps,
-                    ):
-                        extracted_ftags.add(out_ftag)
-
-            key = (grp_s, tname_low)
-            if key not in seen_catalog_keys and out_ftag.is_file():
-                seen_catalog_keys.add(key)
-                catalog_lines.append(f"{grp_s}|{cat_id}|{src_id}|{tname}")
-
-    (cached_root / "catalog.txt").write_text("\n".join(catalog_lines) + "\n", encoding="utf-8")
-    compile_objective_marker_objs_to_ftags(forge_addon_dir)
-    sanitize_cached_ftags_and_baked_maps(forge_addon_dir)
-
-    ocetags_dir = forge_addon_dir / "ocetags"
-    ocetags_dir.mkdir(parents=True, exist_ok=True)
-    sample_tags_dir = ROOT_DIR / "sample tags"
-    if sample_tags_dir.is_dir():
-        for oce_file in sorted(sample_tags_dir.glob("*.ocetags")):
-            shutil.copy2(oce_file, ocetags_dir / oce_file.name)
-
-    print(
-        f"[build_forge] Populated Cached Tag Folder System ({cached_root}) from {len(source_maps)} maps "
-        f"with {len(extracted_ftags)} 3D .ftag bundles, {len(shader_bitmaps)} shader bitmap hints & {len(seen_catalog_keys)} catalog entries"
-    )
 
 
 def _pack_ftag_parts_from_triangles(
@@ -2488,7 +1966,6 @@ def build_haloce_forge_exe() -> Path:
         "forge_cache_builder.c",
         "forge_runtime_tags.c",
         "forge_ai.c",
-        "forge_blueprint_2d.c",
         "forge_3d_mode.c",
         "forge_network.c",
         "forge_hooks.c",
@@ -2548,16 +2025,16 @@ def build_haloce_forge_exe() -> Path:
     wrap_dir = FORGE_BUILD_DIR / "wrapped_obj"
     wrap_dir.mkdir(parents=True, exist_ok=True)
 
-    menu_files_wrapped = wrap_dir / "menu_files.o"
-    shutil.copyfile(obj_root / "port/linux/src/menu_files.o", menu_files_wrapped)
-    subprocess.run([
-        objcopy,
-        "--redefine-sym", "_config_folder=_forge_menu_config_folder",
-        "--redefine-sym", "_SDL_GlobDirectory=_forge_menu_SDL_GlobDirectory",
-        "--redefine-sym", "__imp__SDL_GlobDirectory=___imp__forge_menu_SDL_GlobDirectory",
-        str(menu_files_wrapped),
-    ], check=True)
-    net_replacements["port/linux/src/menu_files.o"] = menu_files_wrapped
+    # Regenerate and compile embedded menu assets (hud_hires_assets.c) and menu_tags.c
+    hud_assets_c = ROOT_DIR / "build" / "windows" / "generated" / "hud_hires_assets.c"
+    print("[build_forge] Regenerating embedded menu & HUD assets (hud_hires_assets.c)...")
+    subprocess.run([sys.executable, str(ROOT_DIR / "tools/embed_assets.py"), str(hud_assets_c)], cwd=str(ROOT_DIR), check=True)
+    hud_assets_o = obj_root / "build/windows/generated/hud_hires_assets.o"
+    print("[build_forge] Compiling hud_hires_assets.c...")
+    compile_c(clang, platform_cflags, hud_assets_c, hud_assets_o)
+    menu_tags_o = obj_root / "port/linux/game/menu_tags.o"
+    print("[build_forge] Compiling menu_tags.c...")
+    compile_c(clang, game_cflags, ROOT_DIR / "port/linux/game/menu_tags.c", menu_tags_o)
 
     chat_wrapped = wrap_dir / "network_chat.o"
     shutil.copyfile(obj_root / "port/linux/game/network_chat.o", chat_wrapped)
@@ -2743,6 +2220,8 @@ def build_haloce_forge_exe() -> Path:
     all_objs: list[str] = []
     for o_path in sorted(obj_root.rglob("*.o")):
         rel_key = o_path.relative_to(obj_root).as_posix()
+        if rel_key.startswith("FORGE CODE/"):
+            continue
         if rel_key in net_replacements:
             all_objs.append(str(net_replacements[rel_key]))
         else:
@@ -2765,7 +2244,8 @@ def build_haloce_forge_exe() -> Path:
     ]
 
     OPENCE_BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    exe_out = OPENCE_BUILD_DIR / "HaloCE Forge.exe"
+    build_exe_out = ROOT_DIR / "build" / "windows" / "halo.exe"
+    exe_out = OPENCE_BUILD_DIR / "halo.exe"
     link_cmd = [
         clang,
         "--target=i686-pc-windows-msvc",
@@ -2775,12 +2255,12 @@ def build_haloce_forge_exe() -> Path:
         "-Wl,/STACK:0x1000000",
         "-Wl,/SUBSYSTEM:CONSOLE",
         "-o",
-        str(exe_out),
+        str(build_exe_out),
         "--rsp-quoting=windows",
         f"@{rsp_file}",
         *libs,
     ]
-    print(f"[build_forge] Linking {exe_out}...")
+    print(f"[build_forge] Linking {build_exe_out}...")
     res = subprocess.run(link_cmd, cwd=str(ROOT_DIR))
     if res.returncode != 0:
         sys.exit(res.returncode)

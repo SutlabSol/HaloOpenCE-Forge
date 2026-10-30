@@ -72,7 +72,7 @@ This document is the authoritative rulebook for **OpenCE Forge (`HaloCE Forge.ex
 1. **Live Multiplayer / Online Co-op Forge Sessions**:
    - **Restricted to `forgeasset.map` Only**: During live online Forge sessions with multiple players, the in-game spawn palette **only** offers items from `forgeasset.map`.
    - `customforgeasset.map` is **disabled** during live multiplayer/co-op Forge editing so every connected Forge client is guaranteed to have 100% identical tags with zero missing-tag crashes or mid-session asset transfers.
-2. **Single-Player Forge Mode (2D Blueprint & 3D In-Engine)**:
+2. **Single-Player Forge Mode (3D In-Engine)**:
    - **Unrestricted**: The creator has full access to both `forgeasset.map` and `customforgeasset.map` (including all user-injected custom tags).
 3. **"Save Copy As..." Standalone Map Baking**:
    - When saving a map to `custom_maps/<map_name>.map`, all placed tags (whether from `forgeasset.map` or `customforgeasset.map`) and their dependencies are baked directly into `custom_maps/<map_name>.map`.
