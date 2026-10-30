@@ -15,6 +15,11 @@
 #include "cache/texture_cache.h"
 #include "tag_preview.h"
 
+/* Mesh buffers are allocated with standard CRT calloc/malloc in forge_runtime_tags.c */
+#undef malloc
+#undef free
+#undef realloc
+
 enum
 {
 	BITMAP_DATA_SIGNATURE = 'bitm',
@@ -70,16 +75,25 @@ void tag_preview_mesh_free(struct tag_injector_mesh *m)
 
 	if (!m)
 		return;
-	free(m->positions);
-	free(m->normals);
-	free(m->texcoords);
-	free(m->triangles);
-	free(m->triangle_materials);
-	free(m->materials);
+	if (m->positions)
+		free(m->positions);
+	if (m->normals)
+		free(m->normals);
+	if (m->texcoords)
+		free(m->texcoords);
+	if (m->triangles)
+		free(m->triangles);
+	if (m->triangle_materials)
+		free(m->triangle_materials);
+	if (m->materials)
+		free(m->materials);
 	if (m->textures)
 	{
 		for (i = 0; i < m->texture_count; i++)
-			free(m->textures[i].pixels);
+		{
+			if (m->textures[i].pixels)
+				free(m->textures[i].pixels);
+		}
 		free(m->textures);
 	}
 	memset(m, 0, sizeof(*m));

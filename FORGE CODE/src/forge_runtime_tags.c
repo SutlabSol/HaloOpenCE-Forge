@@ -8342,7 +8342,7 @@ int forge_ui_open_map_for_tag_browser(char const *map_path)
 		*dot = '\0';
 
 	/* 1. Try opening as a Custom Edition / PC cache map first */
-	ce_hdr = (struct browser_ce_map_header *)custom_edition_cache_bundle_open(map_path, NULL, 0);
+	ce_hdr = is_xbox_version5_map_file(map_path) ? NULL : (struct browser_ce_map_header *)custom_edition_cache_bundle_open(map_path, NULL, 0);
 	if (ce_hdr && ce_hdr->tag_count > 0 && ce_hdr->instances)
 	{
 		int32_t i;
@@ -8351,8 +8351,8 @@ int forge_ui_open_map_for_tag_browser(char const *map_path)
 		s_map_browser.is_open = 1;
 		s_map_browser.is_ce_map = 1;
 		s_map_browser.ce_header = ce_hdr;
-		tag_names_restore(ce_hdr, s_map_browser.map_name, &made);
-		s_map_browser.names_made = made;
+		tag_names_restore(ce_hdr, s_map_browser.map_name, NULL);
+		s_map_browser.names_made = NULL;
 
 		for (c = 0; c < FORGE_BROWSER_NUM_CATS; c++)
 		{
@@ -9288,7 +9288,7 @@ int forge_ui_extract_selected_map_tag(int category_tab, int list_index, char con
 			free(s_map_browser.names_made);
 		s_map_browser.names_made = NULL;
 		tag_names_restore(reopened, s_map_browser.map_name, &made);
-		s_map_browser.names_made = made;
+		s_map_browser.names_made = NULL;
 
 		custom_edition_cache_bundle_source(&source);
 		memset(&report, 0, sizeof(report));
