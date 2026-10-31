@@ -4,8 +4,8 @@
 #include "cseries.h"
 #include "bitmaps/bitmaps.h"
 
-#define TAG_PREVIEW_WIDTH 140
-#define TAG_PREVIEW_HEIGHT 114
+#define TAG_PREVIEW_WIDTH 128
+#define TAG_PREVIEW_HEIGHT 128
 
 struct tag_injector_texture
 {

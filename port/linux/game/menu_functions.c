@@ -761,25 +761,26 @@ static void gamemode_menu_update(struct widget_instance *list)
 				pic->animation.current_frame_index = 1;
 			if (txt)
 			{
-				text_set(
+				text_set_length(
 					txt,
 					!strcmp(fc, "forge_item_multiplayer") ?
-						L"MULTIPLAYER FORGE\r\nHOST OR JOIN LIVE CO-OP\r\nMAP EDITING SESSIONS" :
+						L"MULTIPLAYER FORGE\r\nHOST OR JOIN LIVE\r\nMAP EDITING SESSIONS" :
 					!strcmp(fc, "forge_item_edit_maps") ?
 						L"SAVED FORGE MAPS\r\nBROWSE & LOAD SAVED\r\nFORGE & CUSTOM MAPS" :
 					!strcmp(fc, "forge_item_tag_options") ?
-						L"TAG OPTIONS\r\nMANAGE CUSTOM TAGS,\r\nTAG CACHE & SNAP POINTS" :
+						L"TAG OPTIONS\r\nADD, PREVIEW OR RESET\r\nINSTALLED FORGE TAGS" :
 					!strcmp(fc, "forge_item_add_tags") ?
-						L"ADD TAGS\r\nBROWSE ANY MAP & EXTRACT\r\nCOMPRESSED TAGS TO CACHE" :
+						L"ADD TAGS\r\nEXTRACT TAGS FROM\r\nCUSTOM MAPS TO CACHE" :
 					!strcmp(fc, "forge_item_installed_tags") ?
-						L"INSTALLED TAGS\r\nPREVIEW & MANAGE ALL TAGS\r\nCURRENTLY IN THE CACHE" :
+						L"INSTALLED TAGS\r\nPREVIEW & MANAGE TAGS\r\nIN THE FORGE CACHE" :
 					!strcmp(fc, "forge_item_reset_stock_tags") ?
-						L"RESET STOCK TAGS\r\nCLEAR ALL STOCK EXTRACTED\r\nTAGS FROM THE CACHE" :
+						L"RESET STOCK TAGS\r\nRESTORE DEFAULT STOCK\r\nTAGS IN THE CACHE" :
 					!strcmp(fc, "forge_item_reset_custom_tags") ?
 						L"RESET CUSTOM TAGS\r\nCLEAR ALL CUSTOM TAGS\r\nFROM THE CACHE" :
 					!strcmp(fc, "forge_item_snap_points") ?
-						L"SNAP POINTS\r\nASSIGN 3D SNAP FACES &\r\nALIGNMENT EDGES TO TAGS" :
-						L"SINGLE PLAYER SANDBOX\r\nEDIT ANY STOCK, CUSTOM OR\r\nFORGE MAP SOLO");
+						L"SNAP POINTS\r\nASSIGN 3D SNAP FACES &\r\nALIGNMENT EDGES" :
+						L"SINGLE PLAYER FORGE\r\nEDIT STOCK, CUSTOM OR\r\nFORGE MAPS SOLO",
+					160);
 			}
 			profile_name_show(desc);
 		}
@@ -803,11 +804,12 @@ static void gamemode_menu_update(struct widget_instance *list)
 			pic->animation.current_frame_index = s_focused_gamemode;
 		if (txt)
 		{
-			text_set(
+			text_set_length(
 				txt,
 				s_focused_gamemode == 1 ?
-					L"MAP & SANDBOX EDITOR\r\nBUILD, SPAWN TAGS & EDIT\r\nMAPS SOLO OR TOGETHER" :
-					L"STANDARD MULTIPLAYER\r\nSLAYER, CTF, KING, ODDBALL & RACE");
+					L"MAP & SANDBOX EDITOR\r\nSPAWN TAGS & EDIT MAPS\r\nSOLO OR TOGETHER" :
+					L"STANDARD MULTIPLAYER\r\nSLAYER, CTF, KING,\r\nODDBALL & RACE",
+				160);
 		}
 		profile_name_show(desc);
 	}
@@ -848,16 +850,7 @@ static void mp_type_screen_update(struct widget_instance *list)
 				if (pic)
 					pic->animation.current_frame_index = 2;
 				if (txt)
-					text_set(txt, L"Browse and load your saved\r\nForge and custom maps.");
-			}
-			else if (txt && txt->parameters.text_box.text)
-			{
-				long ustr = tag_loaded('ustr', "ui\\shell\\main_menu\\multiplayer_type_select\\mp_type_help");
-				wchar_t const *s = ustr != NONE ?
-					unicode_string_list_get_string(ustr, txt->parameters.text_box.string_list_index) :
-					NULL;
-				if (s)
-					text_set(txt, s);
+					txt->parameters.text_box.string_list_index = 7;
 			}
 		}
 		profile_name_show(desc);

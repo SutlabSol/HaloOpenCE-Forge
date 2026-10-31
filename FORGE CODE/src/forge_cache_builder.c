@@ -20,6 +20,9 @@ scenario exporter (.map, 140x114 .bmp, .txt).
 #include "scenario/scenario_definitions.h"
 #include "structures/structure_bsp_definitions.h"
 #include "physics/collision_bsp_definitions.h"
+#include "items/item_definitions.h"
+#include "../src/port_tag_profiles.h"
+#include "tag_bundle.h"
 #include "zlib_prefixed.h"
 
 extern void *custom_edition_sounds_encode(
@@ -491,7 +494,7 @@ static int forge_source_map_open(char const *path, struct forge_source_map *map)
 
 		if (decomp_len < map->tag_data_offset + map->tag_data_size)
 			decomp_len = map->tag_data_offset + map->tag_data_size;
-		if (decomp_len < 0x800u || decomp_len > 128u * 1024u * 1024u)
+		if (decomp_len < 0x800u || decomp_len > 512u * 1024u * 1024u)
 		{
 			fclose(f);
 			return 0;
@@ -500,14 +503,23 @@ static int forge_source_map_open(char const *path, struct forge_source_map *map)
 		if (map->version == CACHE_VERSION_XBOX)
 		{
 			int slot;
-			for (slot = 0; slot <= 6; slot++)
+			for (slot = -2; slot <= 6; slot++)
 			{
 				char z_xbox[64];
-				if (slot < 6)
+				if (slot == -2)
+					snprintf(cache_cand, sizeof(cache_cand), "OpenCE Forge/cached_tags/xbox_cache/%s.map", map->map_name);
+				else if (slot == -1)
+					snprintf(cache_cand, sizeof(cache_cand), "OpenCE Forge/cached_tags/xbox_cache/%s", map->filename);
+				else if (slot < 6)
+				{
 					snprintf(z_xbox, sizeof(z_xbox), "z:\\cache00%d.map", slot);
+					platform_translate_path(z_xbox, cache_cand, sizeof(cache_cand));
+				}
 				else
+				{
 					snprintf(z_xbox, sizeof(z_xbox), "z:\\cache_donor.map");
-				platform_translate_path(z_xbox, cache_cand, sizeof(cache_cand));
+					platform_translate_path(z_xbox, cache_cand, sizeof(cache_cand));
+				}
 				cf = fopen(cache_cand, "rb");
 				if (cf)
 				{
@@ -2941,6 +2953,8 @@ struct forge_pending_bake_obj
 	struct forge_pending_bake_part parts[32];
 	char *ocetags_json;
 	size_t ocetags_json_len;
+	long faber_profile_idx;
+	long faber_tag_idx;
 	char xbox_map_path[512];
 	int ocetags_gpart_count;
 	struct forge_pending_ocetags_gpart ocetags_gparts[256];
@@ -3013,6 +3027,57 @@ static void cb_sanitize_vertex_68(uint8_t *v)
 	write_s16(v + 0x3Au, 0);
 	write_f32(v + 0x3Cu, 1.0f);
 	write_f32(v + 0x40u, 0.0f);
+}
+
+static void cb_sanitize_faber_vertex_68(uint8_t *v, int32_t node_limit)
+{
+	float nx, ny, nz, bx, by, bz, tx, ty, tz;
+	int16_t n0, n1;
+	float w0, w1;
+
+	if (node_limit <= 0)
+		node_limit = 1;
+	nx = cb_clamp_unit_float(read_f32(v + 0x0Cu));
+	ny = cb_clamp_unit_float(read_f32(v + 0x10u));
+	nz = cb_clamp_unit_float(read_f32(v + 0x14u));
+	if (nx == 0.0f && ny == 0.0f && nz == 0.0f)
+		nz = 1.0f;
+	bx = cb_clamp_unit_float(read_f32(v + 0x18u));
+	by = cb_clamp_unit_float(read_f32(v + 0x1Cu));
+	bz = cb_clamp_unit_float(read_f32(v + 0x20u));
+	tx = cb_clamp_unit_float(read_f32(v + 0x24u));
+	ty = cb_clamp_unit_float(read_f32(v + 0x28u));
+	tz = cb_clamp_unit_float(read_f32(v + 0x2Cu));
+	write_f32(v + 0x0Cu, nx);
+	write_f32(v + 0x10u, ny);
+	write_f32(v + 0x14u, nz);
+	write_f32(v + 0x18u, bx);
+	write_f32(v + 0x1Cu, by);
+	write_f32(v + 0x20u, bz);
+	write_f32(v + 0x24u, tx);
+	write_f32(v + 0x28u, ty);
+	write_f32(v + 0x2Cu, tz);
+
+	n0 = read_s16(v + 0x38u);
+	n1 = read_s16(v + 0x3Au);
+	w0 = read_f32(v + 0x3Cu);
+	w1 = read_f32(v + 0x40u);
+	if (n0 < 0 || n0 >= node_limit)
+		n0 = 0;
+	if (n1 < 0 || n1 >= node_limit)
+	{
+		n1 = n0;
+		w0 = 1.0f;
+		w1 = 0.0f;
+	}
+	if (w0 != w0 || w0 < 0.0f || w0 > 1.0f)
+		w0 = 1.0f;
+	if (w1 != w1 || w1 < 0.0f || w1 > 1.0f)
+		w1 = 0.0f;
+	write_s16(v + 0x38u, n0);
+	write_s16(v + 0x3Au, n1);
+	write_f32(v + 0x3Cu, w0);
+	write_f32(v + 0x40u, w1);
 }
 
 static int32_t out_map_find_tag(
@@ -4785,6 +4850,828 @@ struct cb_xbox_bake_tag
 	int is_reused_existing;
 };
 
+struct cb_faber_bake_tag
+{
+	uint32_t fourcc;
+	uint32_t p0;
+	uint32_t p1;
+	uint32_t root_off;
+	uint32_t root_sz;
+	char name[256];
+	uint32_t def_foff;
+	int32_t baked_tag_idx;
+	uint32_t baked_handle;
+	uint32_t baked_name_addr;
+};
+
+static int cb_find_faber_vault_bundle_for_tag(
+	uint32_t req_group,
+	char const *req_path,
+	long *out_profile,
+	long *out_tag)
+{
+	long pcount, p, tcount, t;
+
+	if (out_profile) *out_profile = -1;
+	if (out_tag) *out_tag = -1;
+	if (!req_path || !req_path[0])
+		return 0;
+
+	pcount = port_tag_profiles_count();
+	if (pcount <= 0)
+	{
+		port_tag_profiles_scan();
+		pcount = port_tag_profiles_count();
+	}
+	for (p = 0; p < pcount; p++)
+	{
+		tcount = port_tag_profiles_tag_count(p);
+		for (t = 0; t < tcount; t++)
+		{
+			uint32_t tgrp = (uint32_t)port_tag_profiles_tag_group(p, t);
+			char const *tnm = port_tag_profiles_tag_name(p, t);
+			if (tnm && tnm[0] && forge_groups_compatible(tgrp, req_group) &&
+				_stricmp(tnm, req_path) == 0)
+			{
+				if (out_profile) *out_profile = p;
+				if (out_tag) *out_tag = t;
+				return 1;
+			}
+		}
+	}
+	return 0;
+}
+
+static void cb_prescan_faber_vault_models(
+	long prof_idx,
+	long tag_idx,
+	struct forge_pending_bake_obj *pobj,
+	struct forge_byte_buf *extra_verts,
+	struct forge_byte_buf *extra_strips)
+{
+	unsigned long bundle_size = 0;
+	long b_handle = -1;
+	uint8_t header_bytes[TAG_BUNDLE_HEADER_BYTES];
+	uint32_t tags_size = 0;
+	uint8_t *bundle_bytes = NULL;
+	struct tag_bundle_loaded loaded;
+	int32_t ti;
+
+	if (!pobj || !extra_verts || !extra_strips || prof_idx < 0 || tag_idx < 0)
+		return;
+	b_handle = port_tag_profiles_bundle_open(prof_idx, tag_idx, &bundle_size);
+	if (b_handle < 0 || bundle_size < TAG_BUNDLE_HEADER_BYTES)
+	{
+		if (b_handle >= 0) port_tag_profiles_bundle_close(b_handle);
+		return;
+	}
+	if (!port_tag_profiles_bundle_read_at(b_handle, 0, header_bytes, TAG_BUNDLE_HEADER_BYTES))
+	{
+		port_tag_profiles_bundle_close(b_handle);
+		return;
+	}
+	tags_size = tag_bundle_file_data_offset(header_bytes);
+	if (!tags_size || tags_size > bundle_size)
+	{
+		port_tag_profiles_bundle_close(b_handle);
+		return;
+	}
+	bundle_bytes = (uint8_t *)malloc(tags_size);
+	if (!bundle_bytes || !port_tag_profiles_bundle_read_at(b_handle, 0, bundle_bytes, tags_size))
+	{
+		free(bundle_bytes);
+		port_tag_profiles_bundle_close(b_handle);
+		return;
+	}
+	memset(&loaded, 0, sizeof(loaded));
+	if (tag_bundle_load_tags(bundle_bytes, tags_size, (uint32_t)bundle_size, &loaded) != _tag_bundle_status_ok)
+	{
+		free(bundle_bytes);
+		port_tag_profiles_bundle_close(b_handle);
+		return;
+	}
+
+	for (ti = 0; ti < loaded.tag_count; ti++)
+	{
+		uint8_t const *ti_rec = loaded.tags + (uint32_t)ti * 32u;
+		uint32_t grp = read_u32(ti_rec + 0u);
+		uint32_t root_off = read_u32(ti_rec + 16u);
+		uint32_t root_sz = read_u32(ti_rec + 20u);
+
+		if (grp == 'mod2' && root_sz >= 0xE8u && root_off + 0xE8u <= loaded.data_size)
+		{
+			uint8_t const *mod2 = loaded.data + root_off;
+			uint32_t mod2_flags = read_u32(mod2 + 0x00u);
+			int local_nodes = (mod2_flags & 2u) != 0;
+			int32_t mnode_cnt = *(int32_t const *)(mod2 + 0xB8u);
+			int32_t geom_cnt = *(int32_t const *)(mod2 + 0xD0u);
+			uint8_t const *geom_ptr = *(uint8_t *const *)(mod2 + 0xD4u);
+			int32_t g_idx;
+
+			if (geom_cnt > 0 && geom_ptr >= loaded.data &&
+				geom_ptr + (uint64_t)(uint32_t)geom_cnt * 48u <= loaded.data + loaded.data_size)
+			{
+				for (g_idx = 0; g_idx < geom_cnt; g_idx++)
+				{
+					uint8_t const *geom = geom_ptr + (uint32_t)g_idx * 48u;
+					int32_t part_cnt = *(int32_t const *)(geom + 0x24u);
+					uint8_t const *part_ptr = *(uint8_t *const *)(geom + 0x28u);
+					int32_t p_idx;
+
+					if (part_cnt > 0 && part_ptr >= loaded.data &&
+						part_ptr + (uint64_t)(uint32_t)part_cnt * 132u <= loaded.data + loaded.data_size)
+					{
+						for (p_idx = 0; p_idx < part_cnt && pobj->ocetags_gpart_count < 256; p_idx++)
+						{
+							uint8_t const *part = part_ptr + (uint32_t)p_idx * 132u;
+							int32_t tri_cnt = read_s32(part + 0x48u);
+							uint32_t strip_off = read_u32(part + 0x4Cu);
+							int32_t vtx_cnt = read_s32(part + 0x58u);
+							uint32_t vtx_off = read_u32(part + 0x64u);
+							int32_t node_limit = local_nodes ? (int32_t)part[0x67u] : mnode_cnt;
+
+							if (node_limit <= 0)
+								node_limit = 1;
+							if (vtx_cnt > 0 && tri_cnt > 0)
+							{
+								uint32_t vc = (uint32_t)vtx_cnt;
+								uint32_t ic = (uint32_t)tri_cnt + 2u;
+								uint32_t v_bytes = vc * 68u;
+								uint32_t i_bytes = ic * 2u;
+
+								if ((uint64_t)vtx_off + v_bytes <= loaded.file_data_size &&
+									(uint64_t)strip_off + i_bytes <= loaded.file_data_size)
+								{
+									uint32_t v_rel = buf_alloc(extra_verts, v_bytes, 4);
+									uint32_t i_rel = buf_alloc(extra_strips, (ic + 2u) * 2u, 4);
+									if (extra_verts->data && extra_strips->data &&
+										port_tag_profiles_bundle_read_at(b_handle, loaded.file_data_offset + vtx_off, extra_verts->data + v_rel, v_bytes) &&
+										port_tag_profiles_bundle_read_at(b_handle, loaded.file_data_offset + strip_off, extra_strips->data + i_rel, i_bytes))
+									{
+										uint32_t k;
+										struct forge_pending_ocetags_gpart *ogp =
+											&pobj->ocetags_gparts[pobj->ocetags_gpart_count++];
+										for (k = 0; k < vc; k++)
+											cb_sanitize_faber_vertex_68(extra_verts->data + v_rel + k * 68u, node_limit);
+										for (k = 0; k < ic; k++)
+										{
+											uint16_t idx_val = read_u16(extra_strips->data + i_rel + k * 2u);
+											if (idx_val >= vc)
+											{
+												uint16_t safe_val = (k > 0) ? read_u16(extra_strips->data + i_rel + (k - 1u) * 2u) : 0u;
+												if (safe_val >= vc) safe_val = 0u;
+												write_u16(extra_strips->data + i_rel + k * 2u, safe_val);
+											}
+										}
+										write_u16(extra_strips->data + i_rel + ic * 2u, 0xFFFFu);
+										write_u16(extra_strips->data + i_rel + (ic + 1u) * 2u, 0xFFFFu);
+										ogp->tag_idx = (uint32_t)ti;
+										ogp->geom_idx = (uint32_t)g_idx;
+										ogp->part_idx = (uint32_t)p_idx;
+										ogp->vtx_count = vc;
+										ogp->idx_count = ic;
+										ogp->extra_vtx_rel_off = v_rel;
+										ogp->extra_idx_rel_off = i_rel;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	free(bundle_bytes);
+	port_tag_profiles_bundle_close(b_handle);
+}
+
+static void cb_faber_rebase_and_link_schema(
+	struct forge_byte_buf *out,
+	uint32_t tag_data_offset,
+	struct tag_bundle_loaded const *loaded,
+	uint32_t bundle_data_foff,
+	struct tag_schema_definition const *def,
+	uint32_t elem_rel_off,
+	int32_t elem_count,
+	struct cb_faber_bake_tag const *fb_tags,
+	int32_t fb_tag_count,
+	int depth)
+{
+	int32_t e;
+	struct tag_schema_field const *field;
+	uint32_t elem_size;
+
+	if (!out || !out->data || !loaded || !loaded->data || !def || !def->fields ||
+		elem_count <= 0 || def->size <= 0 || depth > 24)
+		return;
+
+	elem_size = (uint32_t)def->size;
+	for (e = 0; e < elem_count; e++)
+	{
+		uint32_t base_rel_off = elem_rel_off + (uint32_t)e * elem_size;
+		uint32_t base_foff = bundle_data_foff + base_rel_off;
+		if ((uint64_t)base_rel_off + elem_size > loaded->data_size ||
+			(uint64_t)base_foff + elem_size > out->size)
+			break;
+
+		for (field = def->fields; field->type != _tag_schema_terminator; field++)
+		{
+			int16_t k;
+			int16_t fcount = (field->count > 0) ? field->count : 1;
+			uint32_t fstride = (field->size > 0) ? (uint32_t)field->size : 0;
+
+			for (k = 0; k < fcount; k++)
+			{
+				uint32_t f_rel_off = base_rel_off + (uint32_t)field->offset + (uint32_t)k * fstride;
+				uint32_t f_foff = bundle_data_foff + f_rel_off;
+
+				if (field->type == _tag_schema_struct)
+				{
+					struct tag_schema_definition const *sub_def =
+						(struct tag_schema_definition const *)field->definition;
+					if (sub_def && (uint32_t)field->offset + (uint32_t)k * fstride + (uint32_t)sub_def->size <= elem_size)
+					{
+						cb_faber_rebase_and_link_schema(
+							out, tag_data_offset, loaded, bundle_data_foff,
+							sub_def, f_rel_off, 1, fb_tags, fb_tag_count, depth + 1);
+					}
+				}
+				else if (field->type == _tag_schema_block)
+				{
+					struct tag_schema_definition const *child_def =
+						(struct tag_schema_definition const *)field->definition;
+					if (child_def && child_def->size > 0 &&
+						f_rel_off + 12u <= loaded->data_size && f_foff + 12u <= out->size)
+					{
+						int32_t cnt = *(int32_t const *)(loaded->data + f_rel_off + 0u);
+						uint8_t const *ptr = *(uint8_t *const *)(loaded->data + f_rel_off + 4u);
+						uint32_t child_sz = (uint32_t)child_def->size;
+						if (cnt > 0 && ptr >= loaded->data &&
+							ptr + (uint64_t)(uint32_t)cnt * child_sz <= loaded->data + loaded->data_size)
+						{
+							uint32_t child_rel = (uint32_t)(ptr - loaded->data);
+							write_s32(out->data + f_foff + 0u, cnt);
+							write_u32(out->data + f_foff + 4u,
+								CE_TAG_BASE_ADDR + (bundle_data_foff + child_rel - tag_data_offset));
+							write_u32(out->data + f_foff + 8u, 0u);
+							cb_faber_rebase_and_link_schema(
+								out, tag_data_offset, loaded, bundle_data_foff,
+								child_def, child_rel, cnt, fb_tags, fb_tag_count, depth + 1);
+						}
+						else
+						{
+							memset(out->data + f_foff, 0, 12u);
+						}
+					}
+				}
+				else if (field->type == _tag_schema_data)
+				{
+					if (f_rel_off + 20u <= loaded->data_size && f_foff + 20u <= out->size)
+					{
+						int32_t sz = *(int32_t const *)(loaded->data + f_rel_off + 0u);
+						uint8_t const *ptr = *(uint8_t *const *)(loaded->data + f_rel_off + 12u);
+						if (sz > 0 && ptr >= loaded->data &&
+							ptr + (uint32_t)sz <= loaded->data + loaded->data_size)
+						{
+							uint32_t td_rel = (uint32_t)(ptr - loaded->data);
+							write_s32(out->data + f_foff + 0u, sz);
+							write_u32(out->data + f_foff + 4u, 0u);
+							write_u32(out->data + f_foff + 8u, 0u);
+							write_u32(out->data + f_foff + 12u,
+								CE_TAG_BASE_ADDR + (bundle_data_foff + td_rel - tag_data_offset));
+							write_u32(out->data + f_foff + 16u, 0u);
+						}
+						else
+						{
+							memset(out->data + f_foff, 0, 20u);
+						}
+					}
+				}
+				else if (field->type == _tag_schema_reference)
+				{
+					if (f_rel_off + 16u <= loaded->data_size && f_foff + 16u <= out->size)
+					{
+						int32_t b_idx = *(int32_t const *)(loaded->data + f_rel_off + 12u);
+						if (b_idx >= 0 && b_idx < fb_tag_count && fb_tags[b_idx].baked_tag_idx >= 0)
+						{
+							write_u32(out->data + f_foff + 0u, fb_tags[b_idx].fourcc);
+							write_u32(out->data + f_foff + 4u, fb_tags[b_idx].baked_name_addr);
+							write_s32(out->data + f_foff + 8u, 0);
+							write_u32(out->data + f_foff + 12u, fb_tags[b_idx].baked_handle);
+						}
+						else
+						{
+							write_u32(out->data + f_foff + 0u, 0xFFFFFFFFu);
+							write_u32(out->data + f_foff + 4u, 0u);
+							write_s32(out->data + f_foff + 8u, 0);
+							write_u32(out->data + f_foff + 12u, 0xFFFFFFFFu);
+						}
+					}
+				}
+				else if (field->type == _tag_schema_tag_index)
+				{
+					if (f_rel_off + 4u <= loaded->data_size && f_foff + 4u <= out->size)
+					{
+						int32_t b_idx = *(int32_t const *)(loaded->data + f_rel_off);
+						if (b_idx >= 0 && b_idx < fb_tag_count && fb_tags[b_idx].baked_tag_idx >= 0)
+							write_u32(out->data + f_foff, fb_tags[b_idx].baked_handle);
+						else
+							write_u32(out->data + f_foff, 0xFFFFFFFFu);
+					}
+				}
+			}
+		}
+	}
+}
+
+static int32_t out_map_bake_faber_vault_bundle(
+	struct forge_byte_buf *out,
+	uint32_t tag_data_offset,
+	uint32_t scnr_off,
+	uint32_t orig_vtx_size,
+	uint32_t orig_idx_size,
+	struct forge_pending_bake_obj const *pobj)
+{
+	unsigned long bundle_size = 0;
+	long b_handle = -1;
+	uint8_t header_bytes[TAG_BUNDLE_HEADER_BYTES];
+	uint32_t tags_size = 0;
+	uint8_t *bundle_bytes = NULL;
+	struct tag_bundle_loaded loaded;
+	struct cb_faber_bake_tag *fb_tags = NULL;
+	uint32_t bundle_data_foff;
+	int32_t ti;
+	int32_t root_baked_idx = -1;
+
+	if (!out || !out->data || !pobj || pobj->faber_profile_idx < 0 || pobj->faber_tag_idx < 0)
+		return -1;
+	b_handle = port_tag_profiles_bundle_open(pobj->faber_profile_idx, pobj->faber_tag_idx, &bundle_size);
+	if (b_handle < 0 || bundle_size < TAG_BUNDLE_HEADER_BYTES)
+	{
+		if (b_handle >= 0) port_tag_profiles_bundle_close(b_handle);
+		return -1;
+	}
+	if (!port_tag_profiles_bundle_read_at(b_handle, 0, header_bytes, TAG_BUNDLE_HEADER_BYTES))
+	{
+		port_tag_profiles_bundle_close(b_handle);
+		return -1;
+	}
+	tags_size = tag_bundle_file_data_offset(header_bytes);
+	if (!tags_size || tags_size > bundle_size)
+	{
+		port_tag_profiles_bundle_close(b_handle);
+		return -1;
+	}
+	bundle_bytes = (uint8_t *)malloc(tags_size);
+	if (!bundle_bytes || !port_tag_profiles_bundle_read_at(b_handle, 0, bundle_bytes, tags_size))
+	{
+		free(bundle_bytes);
+		port_tag_profiles_bundle_close(b_handle);
+		return -1;
+	}
+	memset(&loaded, 0, sizeof(loaded));
+	if (tag_bundle_load_tags(bundle_bytes, tags_size, (uint32_t)bundle_size, &loaded) != _tag_bundle_status_ok ||
+		loaded.tag_count <= 0 || loaded.data_size == 0)
+	{
+		free(bundle_bytes);
+		port_tag_profiles_bundle_close(b_handle);
+		return -1;
+	}
+
+	fb_tags = (struct cb_faber_bake_tag *)calloc((size_t)loaded.tag_count, sizeof(*fb_tags));
+	if (!fb_tags)
+	{
+		free(bundle_bytes);
+		port_tag_profiles_bundle_close(b_handle);
+		return -1;
+	}
+
+	bundle_data_foff = buf_alloc(out, loaded.data_size, 16);
+	if (!bundle_data_foff || !out->data)
+	{
+		free(fb_tags);
+		free(bundle_bytes);
+		port_tag_profiles_bundle_close(b_handle);
+		return -1;
+	}
+	memcpy(out->data + bundle_data_foff, loaded.data, loaded.data_size);
+
+	/* 1. Allocate tag_instances in out for all tags in the bundle */
+	for (ti = 0; ti < loaded.tag_count; ti++)
+	{
+		uint8_t const *ti_rec = loaded.tags + (uint32_t)ti * 32u;
+		struct cb_faber_bake_tag *ft = &fb_tags[ti];
+		uint32_t name_off = read_u32(ti_rec + 12u);
+		char const *tname = (name_off < loaded.names_size)
+			? (char const *)(loaded.names + name_off) : "forge\\custom_tag";
+		char alloc_name[256];
+
+		ft->fourcc = read_u32(ti_rec + 0u);
+		ft->p0 = read_u32(ti_rec + 4u);
+		ft->p1 = read_u32(ti_rec + 8u);
+		ft->root_off = read_u32(ti_rec + 16u);
+		ft->root_sz = read_u32(ti_rec + 20u);
+		ft->def_foff = bundle_data_foff + ft->root_off;
+		snprintf(ft->name, sizeof(ft->name), "%s", tname);
+
+		if (ft->fourcc == 'scex')
+		{
+			ft->p0 = 'shdr';
+			ft->p1 = 0xFFFFFFFFu;
+		}
+		if (ti > 0 && out_map_find_tag(out, tag_data_offset, ft->fourcc, ft->name) >= 0)
+		{
+			snprintf(alloc_name, sizeof(alloc_name), "%.220s__fb%d_%d",
+				ft->name, (int)pobj->faber_profile_idx, (int)pobj->faber_tag_idx);
+		}
+		else
+		{
+			snprintf(alloc_name, sizeof(alloc_name), "%s", ft->name);
+		}
+
+		ft->baked_tag_idx = out_map_alloc_tag_instance(
+			out, tag_data_offset, scnr_off,
+			ft->fourcc, ft->p0, ft->p1,
+			alloc_name, ft->def_foff, 0u,
+			&ft->baked_handle, &ft->baked_name_addr);
+	}
+
+	/* 2. Rebase all tag_blocks and tag_data to CE_TAG_BASE_ADDR and link all tag_references */
+	for (ti = 0; ti < loaded.tag_count; ti++)
+	{
+		struct cb_faber_bake_tag *ft = &fb_tags[ti];
+		struct tag_schema_group const *sgrp = forge_schema_group_get(ft->fourcc);
+		if (ft->baked_tag_idx < 0 || !sgrp || !sgrp->definition)
+			continue;
+		cb_faber_rebase_and_link_schema(
+			out, tag_data_offset, &loaded, bundle_data_foff,
+			sgrp->definition, ft->root_off, 1, fb_tags, loaded.tag_count, 0);
+	}
+
+	/* 3. Post-process mod2 geometry offsets, bitm pixels, snd! samples, shader types, and vehicle seats */
+	for (ti = 0; ti < loaded.tag_count; ti++)
+	{
+		struct cb_faber_bake_tag *ft = &fb_tags[ti];
+		uint32_t def_foff = ft->def_foff;
+		if (ft->baked_tag_idx < 0 || def_foff + ft->root_sz > out->size)
+			continue;
+
+		if (ft->fourcc == 'mod2' && ft->root_sz >= 0xE8u)
+		{
+			uint32_t mod2_flags = read_u32(out->data + def_foff + 0x00u);
+			int local_nodes = (mod2_flags & 2u) != 0;
+			int32_t mnode_cnt = read_s32(out->data + def_foff + 0xB8u);
+			int32_t geom_cnt = read_s32(out->data + def_foff + 0xD0u);
+			uint32_t geom_addr = read_u32(out->data + def_foff + 0xD4u);
+			int32_t shdr_cnt = read_s32(out->data + def_foff + 0xDCu);
+			int32_t g_idx;
+
+			if (geom_cnt > 0 && geom_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t geom_base = tag_data_offset + (geom_addr - CE_TAG_BASE_ADDR);
+				for (g_idx = 0; g_idx < geom_cnt; g_idx++)
+				{
+					uint32_t g_foff = geom_base + (uint32_t)g_idx * 48u;
+					int32_t part_cnt, p_idx;
+					uint32_t part_addr, part_base;
+
+					if (g_foff + 48u > out->size)
+						break;
+					part_cnt = read_s32(out->data + g_foff + 0x24u);
+					part_addr = read_u32(out->data + g_foff + 0x28u);
+					if (part_cnt <= 0 || part_addr < CE_TAG_BASE_ADDR)
+						continue;
+					part_base = tag_data_offset + (part_addr - CE_TAG_BASE_ADDR);
+					for (p_idx = 0; p_idx < part_cnt; p_idx++)
+					{
+						uint32_t p_foff = part_base + (uint32_t)p_idx * 132u;
+						int16_t s_idx, cp_node, cs_node;
+						int8_t prev_p, next_p;
+						int gp_i;
+
+						if (p_foff + 132u > out->size)
+							break;
+						s_idx = read_s16(out->data + p_foff + 0x04u);
+						if (s_idx < 0 || (shdr_cnt > 0 && s_idx >= shdr_cnt))
+							write_s16(out->data + p_foff + 0x04u, 0);
+						prev_p = (int8_t)out->data[p_foff + 0x06u];
+						next_p = (int8_t)out->data[p_foff + 0x07u];
+						if (prev_p < -1 || prev_p >= part_cnt)
+							out->data[p_foff + 0x06u] = 0xFFu;
+						if (next_p < -1 || next_p >= part_cnt)
+							out->data[p_foff + 0x07u] = 0xFFu;
+						cp_node = read_s16(out->data + p_foff + 0x08u);
+						cs_node = read_s16(out->data + p_foff + 0x0Au);
+						if (cp_node < 0 || (mnode_cnt > 0 && cp_node >= mnode_cnt))
+							write_s16(out->data + p_foff + 0x08u, 0);
+						if (cs_node < 0 || (mnode_cnt > 0 && cs_node >= mnode_cnt))
+							write_s16(out->data + p_foff + 0x0Au, 0);
+						if (local_nodes)
+						{
+							uint8_t lnc = out->data[p_foff + 0x67u];
+							uint8_t ni;
+							if (lnc == 0 || lnc > 22)
+							{
+								lnc = 1;
+								out->data[p_foff + 0x67u] = 1;
+								out->data[p_foff + 0x68u] = 0;
+							}
+							for (ni = 0; ni < lnc; ni++)
+							{
+								if (mnode_cnt > 0 && out->data[p_foff + 0x68u + ni] >= (uint8_t)mnode_cnt)
+									out->data[p_foff + 0x68u + ni] = 0;
+							}
+						}
+						memset(out->data + p_foff + 0x20u, 0, 36u);
+
+						for (gp_i = 0; gp_i < pobj->ocetags_gpart_count; gp_i++)
+						{
+							struct forge_pending_ocetags_gpart const *ogp = &pobj->ocetags_gparts[gp_i];
+							if (ogp->tag_idx == (uint32_t)ti &&
+								ogp->geom_idx == (uint32_t)g_idx &&
+								ogp->part_idx == (uint32_t)p_idx)
+							{
+								write_s16(out->data + p_foff + 0x44u, 1);
+								write_s32(out->data + p_foff + 0x48u,
+									(int32_t)(ogp->idx_count >= 2u ? (ogp->idx_count - 2u) : 1u));
+								write_u32(out->data + p_foff + 0x4Cu, orig_idx_size + ogp->extra_idx_rel_off);
+								write_u32(out->data + p_foff + 0x50u, orig_idx_size + ogp->extra_idx_rel_off);
+								write_s16(out->data + p_foff + 0x54u, 4);
+								write_s32(out->data + p_foff + 0x58u, (int32_t)ogp->vtx_count);
+								write_u32(out->data + p_foff + 0x5Cu, 0u);
+								write_u32(out->data + p_foff + 0x60u, orig_vtx_size + ogp->extra_vtx_rel_off);
+								write_u32(out->data + p_foff + 0x64u, orig_vtx_size + ogp->extra_vtx_rel_off);
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+		else if (ft->fourcc == 'bitm' && ft->root_sz >= 0x6Cu)
+		{
+			uint16_t bgrp_flags = read_u16(out->data + def_foff + 0x06u);
+			int32_t b_cnt = read_s32(out->data + def_foff + 0x60u);
+			uint32_t b_addr = read_u32(out->data + def_foff + 0x64u);
+			int32_t b_i;
+
+			/* Clear BITMAP_HALF_HUD_SCALE_BIT | BITMAP_FORCE_HUD_HIGH_RESOLUTION_SCALE_BIT so HUD scales are not halved twice */
+			write_u16(out->data + def_foff + 0x06u, (uint16_t)(bgrp_flags & ~0x0090u));
+			memset(out->data + def_foff + 0x1Cu, 0, 20u);
+
+			if (b_cnt > 0 && b_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t b_base = tag_data_offset + (b_addr - CE_TAG_BASE_ADDR);
+				for (b_i = 0; b_i < b_cnt; b_i++)
+				{
+					uint32_t bd_foff = b_base + (uint32_t)b_i * 48u;
+					uint16_t bd_flags;
+					uint32_t pix_off, pix_sz;
+
+					if (bd_foff + 48u > out->size)
+						break;
+					bd_flags = read_u16(out->data + bd_foff + 0x0Eu);
+					pix_off = read_u32(out->data + bd_foff + 0x18u);
+					pix_sz = read_u32(out->data + bd_foff + 0x1Cu);
+					bd_flags = (uint16_t)((bd_flags & ~0x0100u) | 0x0080u);
+					write_u16(out->data + bd_foff + 0x0Eu, bd_flags);
+					write_u32(out->data + bd_foff + 0x20u, ft->baked_handle);
+					write_u32(out->data + bd_foff + 0x24u, 0xFFFFFFFFu);
+					write_u32(out->data + bd_foff + 0x28u, 0u);
+					write_u32(out->data + bd_foff + 0x2Cu, 0u);
+
+					if (pix_sz > 0 && (uint64_t)pix_off + pix_sz <= loaded.file_data_size)
+					{
+						uint8_t *tmp_pix = (uint8_t *)malloc(pix_sz);
+						if (tmp_pix && port_tag_profiles_bundle_read_at(b_handle, loaded.file_data_offset + pix_off, tmp_pix, pix_sz))
+						{
+							write_u32(out->data + bd_foff + 0x18u, 0u);
+							cb_alloc_deferred_media(tmp_pix, pix_sz, 32, bd_foff + 0x18u);
+						}
+						free(tmp_pix);
+					}
+					else
+					{
+						write_u32(out->data + bd_foff + 0x18u, 0u);
+						write_u32(out->data + bd_foff + 0x1Cu, 0u);
+					}
+				}
+			}
+		}
+		else if (ft->fourcc == 'snd!' && ft->root_sz >= 0xA4u)
+		{
+			int32_t pr_cnt = read_s32(out->data + def_foff + 0x98u);
+			uint32_t pr_addr = read_u32(out->data + def_foff + 0x9Cu);
+			int32_t pr_i;
+
+			write_u32(out->data + def_foff + 0x70u, 0xFFFFFFFFu);
+			write_u32(out->data + def_foff + 0x74u, 0u);
+			write_u32(out->data + def_foff + 0x78u, 0u);
+			write_u32(out->data + def_foff + 0x7Cu, 0xFFFFFFFFu);
+			write_s16(out->data + def_foff + 0x80u, 0);
+
+			if (pr_cnt > 0 && pr_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t pr_base = tag_data_offset + (pr_addr - CE_TAG_BASE_ADDR);
+				for (pr_i = 0; pr_i < pr_cnt; pr_i++)
+				{
+					uint32_t pr_foff = pr_base + (uint32_t)pr_i * 72u;
+					int32_t pm_cnt, pm_i;
+					uint32_t pm_addr, pm_base;
+
+					if (pr_foff + 72u > out->size)
+						break;
+					pm_cnt = read_s32(out->data + pr_foff + 0x3Cu);
+					pm_addr = read_u32(out->data + pr_foff + 0x40u);
+					if (pm_cnt <= 0 || pm_addr < CE_TAG_BASE_ADDR)
+						continue;
+					pm_base = tag_data_offset + (pm_addr - CE_TAG_BASE_ADDR);
+					for (pm_i = 0; pm_i < pm_cnt; pm_i++)
+					{
+						uint32_t pm_foff = pm_base + (uint32_t)pm_i * 124u;
+						int32_t smp_sz;
+						uint32_t smp_off;
+
+						if (pm_foff + 124u > out->size)
+							break;
+						smp_sz = read_s32(out->data + pm_foff + 0x40u);
+						smp_off = read_u32(out->data + pm_foff + 0x48u);
+						write_u32(out->data + pm_foff + 0x2Cu, 0xFFFFFFFFu);
+						write_u32(out->data + pm_foff + 0x30u, 0u);
+						write_u32(out->data + pm_foff + 0x34u, ft->baked_handle);
+						write_u32(out->data + pm_foff + 0x3Cu, ft->baked_handle);
+
+						if (smp_sz > 0 && (uint64_t)smp_off + (uint32_t)smp_sz <= loaded.file_data_size)
+						{
+							uint8_t *tmp_snd = (uint8_t *)malloc((uint32_t)smp_sz);
+							if (tmp_snd && port_tag_profiles_bundle_read_at(
+								b_handle, loaded.file_data_offset + smp_off, tmp_snd, (uint32_t)smp_sz))
+							{
+								write_s32(out->data + pm_foff + 0x40u, smp_sz);
+								write_u32(out->data + pm_foff + 0x44u, 0u);
+								write_u32(out->data + pm_foff + 0x48u, 0u);
+								write_u32(out->data + pm_foff + 0x4Cu, 0u);
+								write_u32(out->data + pm_foff + 0x50u, 0u);
+								cb_alloc_deferred_media(tmp_snd, (uint32_t)smp_sz, 16, pm_foff + 0x48u);
+							}
+							free(tmp_snd);
+						}
+						else
+						{
+							memset(out->data + pm_foff + 0x40u, 0, 20u);
+						}
+					}
+				}
+			}
+		}
+		else if (ft->fourcc == 'swat' && ft->root_sz >= 0x28u)
+			write_u16(out->data + def_foff + 0x24u, 8u);
+		else if (ft->fourcc == 'sgla' && ft->root_sz >= 0x28u)
+			write_u16(out->data + def_foff + 0x24u, 9u);
+		else if (ft->fourcc == 'smet' && ft->root_sz >= 0x28u)
+			write_u16(out->data + def_foff + 0x24u, 10u);
+		else if (ft->fourcc == 'spla' && ft->root_sz >= 0x28u)
+			write_u16(out->data + def_foff + 0x24u, 11u);
+		else if (ft->fourcc == 'ligh' && ft->root_sz >= 0x58u)
+		{
+			uint32_t flags = read_u32(out->data + def_foff + 0x00u);
+			float rad = read_f32(out->data + def_foff + 0x04u);
+			write_u32(out->data + def_foff + 0x00u, flags | 0x01u);
+			if (rad < 4.5f)
+				write_f32(out->data + def_foff + 0x04u, 4.5f);
+		}
+		else if ((ft->fourcc == 'scen' || ft->fourcc == 'lifi' || ft->fourcc == 'mach') && ft->root_sz >= 0x17Cu)
+		{
+			if (read_f32(out->data + def_foff + 0x04u) < 0.45f)
+				write_f32(out->data + def_foff + 0x04u, 0.45f);
+			if (read_f32(out->data + def_foff + 0x104u) < 1.5f)
+				write_f32(out->data + def_foff + 0x104u, 1.5f);
+		}
+		else if (ft->fourcc == 'vehi' && ft->root_sz >= 0x3F0u)
+		{
+			int32_t seat_cnt = read_s32(out->data + def_foff + 0x2DCu);
+			uint32_t seat_addr = read_u32(out->data + def_foff + 0x2E0u);
+			write_u32(out->data + def_foff + 0x17Cu,
+				read_u32(out->data + def_foff + 0x17Cu) | (1u << 29) | (1u << 4));
+			if (seat_cnt > 0 && seat_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t s0_foff = tag_data_offset + (seat_addr - CE_TAG_BASE_ADDR);
+				if (s0_foff + 284u <= out->size)
+				{
+					uint32_t sflags = read_u32(out->data + s0_foff + 0x00u);
+					char const *slabel = (char const *)(out->data + s0_foff + 0x04u);
+					sflags &= ~0x01u;
+					sflags |= (1u << 2) | (1u << 4) | (1u << 5);
+					write_u32(out->data + s0_foff + 0x00u, sflags);
+					if (_stricmp(slabel, "W-driver") != 0 &&
+						_stricmp(slabel, "G-driver") != 0 &&
+						_stricmp(slabel, "B-driver") != 0 &&
+						_stricmp(slabel, "S-driver") != 0 &&
+						_stricmp(slabel, "R-driver") != 0 &&
+						_stricmp(slabel, "scorpion-driver") != 0 &&
+						_stricmp(slabel, "CT-driver") != 0)
+					{
+						memset(out->data + s0_foff + 0x04u, 0, 32u);
+						memcpy(out->data + s0_foff + 0x04u, "W-driver", 8u);
+					}
+				}
+			}
+		}
+	}
+
+	root_baked_idx = fb_tags[0].baked_tag_idx;
+	free(fb_tags);
+	free(bundle_bytes);
+	port_tag_profiles_bundle_close(b_handle);
+	return root_baked_idx;
+}
+
+static int cb_xbox_map_contains_tag_fast(
+	char const *cand_path,
+	uint32_t group_tag,
+	char const *tag_path)
+{
+	FILE *f;
+	uint8_t hdr[0x800];
+	long fsz;
+	uint32_t tag_data_off, tag_data_sz;
+	uint8_t *tag_buf;
+	uint32_t inst_addr, base_addr, inst_off;
+	int32_t tag_count, i;
+	int found = 0;
+
+	f = fopen(cand_path, "rb");
+	if (!f)
+		return 0;
+	if (fseek(f, 0, SEEK_END) != 0 || (fsz = ftell(f)) < 0x800L ||
+		fseek(f, 0, SEEK_SET) != 0 || fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr))
+	{
+		fclose(f);
+		return 0;
+	}
+	if (read_u32(hdr) != CACHE_HEADER_SIGNATURE || read_s32(hdr + 0x04) != CACHE_VERSION_XBOX)
+	{
+		fclose(f);
+		return 0;
+	}
+	tag_data_off = read_u32(hdr + 0x10);
+	tag_data_sz = read_u32(hdr + 0x14);
+	if ((uint64_t)tag_data_off + (uint64_t)tag_data_sz > (uint64_t)fsz)
+	{
+		struct forge_source_map xmap;
+		fclose(f);
+		if (!forge_source_map_open(cand_path, &xmap))
+			return 0;
+		found = (xmap.version == CACHE_VERSION_XBOX && src_map_find_tag_or_variant(&xmap, group_tag, tag_path) >= 0);
+		forge_source_map_close(&xmap);
+		return found;
+	}
+	if (tag_data_sz < 0x28u || tag_data_sz > 64u * 1024u * 1024u)
+	{
+		fclose(f);
+		return 0;
+	}
+	tag_buf = (uint8_t *)malloc(tag_data_sz);
+	if (!tag_buf)
+	{
+		fclose(f);
+		return 0;
+	}
+	if (fseek(f, (long)tag_data_off, SEEK_SET) != 0 || fread(tag_buf, 1, tag_data_sz, f) != tag_data_sz)
+	{
+		free(tag_buf);
+		fclose(f);
+		return 0;
+	}
+	fclose(f);
+
+	inst_addr = read_u32(tag_buf + 0x00);
+	tag_count = read_s32(tag_buf + 0x0C);
+	base_addr = (inst_addr >= 0x24u) ? (inst_addr - 0x24u) : XBOX_TAG_BASE_ADDR;
+	inst_off = inst_addr - base_addr;
+	if (tag_count > 0 && tag_count <= 65535 && inst_off + (uint32_t)tag_count * 32u <= tag_data_sz)
+	{
+		for (i = 0; i < tag_count; i++)
+		{
+			uint8_t const *inst = tag_buf + inst_off + (uint32_t)i * 32u;
+			uint32_t grp = read_u32(inst + 0x00);
+			uint32_t naddr = read_u32(inst + 0x10);
+			if (forge_groups_compatible(grp, group_tag) && naddr >= base_addr && (naddr - base_addr) < tag_data_sz)
+			{
+				char const *nm = (char const *)(tag_buf + (naddr - base_addr));
+				if (_stricmp(nm, tag_path) == 0)
+				{
+					found = 1;
+					break;
+				}
+			}
+		}
+	}
+	free(tag_buf);
+	return found;
+}
+
 static int cb_find_xbox_donor_map_for_tag(
 	uint32_t group_tag,
 	char const *tag_path,
@@ -4800,6 +5687,7 @@ static int cb_find_xbox_donor_map_for_tag(
 		"sidewinder.map", "wizard.map"
 	};
 	static char const *const map_dirs[] = {
+		"OpenCE Forge/cached_tags/xbox_cache",
 		"maps",
 		"assets/maps",
 		"../assets/maps",
@@ -4812,24 +5700,87 @@ static int cb_find_xbox_donor_map_for_tag(
 		return 0;
 	out_map_path[0] = '\0';
 
-	for (m = 0; m < sizeof(map_files) / sizeof(map_files[0]); m++)
+#ifdef _WIN32
+	/* 1. Check .fxtg compressed Xbox tag bundles in OpenCE Forge/custom_tags/*.fxtg */
 	{
-		for (d = 0; d < sizeof(map_dirs) / sizeof(map_dirs[0]); d++)
+		struct _finddata_t fd;
+		intptr_t h = _findfirst("OpenCE Forge/custom_tags/*.fxtg", &fd);
+		if (h != -1)
+		{
+			do
+			{
+				if (!(fd.attrib & _A_SUBDIR))
+				{
+					char fxtg_path[512];
+					FILE *fp;
+					snprintf(fxtg_path, sizeof(fxtg_path), "OpenCE Forge/custom_tags/%s", fd.name);
+					fp = fopen(fxtg_path, "rb");
+					if (fp)
+					{
+						uint8_t fhdr[304];
+						if (fread(fhdr, 1, sizeof(fhdr), fp) == sizeof(fhdr) &&
+							memcmp(fhdr, "FXTG", 4) == 0 && read_u32(fhdr + 4) == 1u)
+						{
+							uint32_t fgrp = read_u32(fhdr + 8);
+							char const *fpath = (char const *)(fhdr + 12);
+							uint32_t uncomp_sz = read_u32(fhdr + 296);
+							uint32_t comp_sz = read_u32(fhdr + 300);
+							if (forge_groups_compatible(fgrp, group_tag) &&
+								_stricmp(fpath, tag_path) == 0 &&
+								uncomp_sz >= 0x800u && uncomp_sz <= 512u * 1024u * 1024u && comp_sz > 0)
+							{
+								uint8_t *cbuf = (uint8_t *)malloc(comp_sz);
+								uint8_t *ubuf = (uint8_t *)malloc(uncomp_sz);
+								uLongf dst_len = (uLongf)uncomp_sz;
+								if (cbuf && ubuf &&
+									fread(cbuf, 1, comp_sz, fp) == comp_sz &&
+									uncompress(ubuf, &dst_len, cbuf, (uLong)comp_sz) == Z_OK &&
+									dst_len == (uLongf)uncomp_sz)
+								{
+									char tmp_donor[512];
+									FILE *df;
+									FORGE_MKDIR("OpenCE Forge/cached_tags");
+									FORGE_MKDIR("OpenCE Forge/cached_tags/xbox_cache");
+									snprintf(tmp_donor, sizeof(tmp_donor),
+										"OpenCE Forge/cached_tags/xbox_cache/_fxtg_bake_donor.map");
+									df = fopen(tmp_donor, "wb");
+									if (df)
+									{
+										fwrite(ubuf, 1, uncomp_sz, df);
+										fclose(df);
+										snprintf(out_map_path, out_map_path_sz, "%s", tmp_donor);
+										free(cbuf);
+										free(ubuf);
+										fclose(fp);
+										_findclose(h);
+										return 1;
+									}
+								}
+								free(cbuf);
+								free(ubuf);
+							}
+						}
+						fclose(fp);
+					}
+				}
+			} while (_findnext(h, &fd) == 0);
+			_findclose(h);
+		}
+	}
+#endif
+
+	for (d = 0; d < sizeof(map_dirs) / sizeof(map_dirs[0]); d++)
+	{
+		for (m = 0; m < sizeof(map_files) / sizeof(map_files[0]); m++)
 		{
 			char cand[512];
-			struct forge_source_map xmap;
 
 			snprintf(cand, sizeof(cand), "%s/%s", map_dirs[d], map_files[m]);
-			if (!forge_source_map_open(cand, &xmap))
-				continue;
-			if (xmap.version == CACHE_VERSION_XBOX &&
-				src_map_find_tag_or_variant(&xmap, group_tag, tag_path) >= 0)
+			if (cb_xbox_map_contains_tag_fast(cand, group_tag, tag_path))
 			{
 				snprintf(out_map_path, out_map_path_sz, "%s", cand);
-				forge_source_map_close(&xmap);
 				return 1;
 			}
-			forge_source_map_close(&xmap);
 		}
 	}
 	return 0;
@@ -6395,6 +7346,56 @@ static int32_t out_map_clone_vehicle_tag_for_mp(
 		NULL, NULL);
 }
 
+static int32_t out_map_create_item_collection_for_tag(
+	struct forge_byte_buf *out,
+	uint32_t tag_data_offset,
+	uint32_t scnr_off,
+	uint32_t item_group,
+	int32_t item_tag_idx,
+	int32_t unique_seq,
+	uint32_t *out_itmc_handle,
+	uint32_t *out_itmc_name_addr)
+{
+	uint32_t io, item_handle, item_name_addr;
+	uint32_t itmc_foff, perm_foff;
+	char itmc_name[128];
+
+	if (out_itmc_handle) *out_itmc_handle = 0xFFFFFFFFu;
+	if (out_itmc_name_addr) *out_itmc_name_addr = 0u;
+	if (!out || !out->data || item_tag_idx < 0)
+		return -1;
+	io = tag_data_offset + 0x28u + (uint32_t)item_tag_idx * 32u;
+	if (io + 32u > out->size)
+		return -1;
+	item_handle = read_u32(out->data + io + 0x0Cu);
+	item_name_addr = read_u32(out->data + io + 0x10u);
+
+	itmc_foff = buf_alloc(out, (uint32_t)sizeof(struct item_collection_definition), 4);
+	perm_foff = buf_alloc(out, (uint32_t)sizeof(struct item_permutation_definition), 4);
+	if (!itmc_foff || !perm_foff || !out->data)
+		return -1;
+
+	memset(out->data + itmc_foff, 0, sizeof(struct item_collection_definition));
+	write_s32(out->data + itmc_foff + 0x00u, 1);
+	write_u32(out->data + itmc_foff + 0x04u, CE_TAG_BASE_ADDR + (perm_foff - tag_data_offset));
+	write_u32(out->data + itmc_foff + 0x08u, 0u);
+	write_s16(out->data + itmc_foff + 0x0Cu, 30); /* spawn_time = 30s */
+
+	memset(out->data + perm_foff, 0, sizeof(struct item_permutation_definition));
+	write_f32(out->data + perm_foff + 0x20u, 100.0f); /* weight = 100.0f */
+	write_u32(out->data + perm_foff + 0x24u, item_group);
+	write_u32(out->data + perm_foff + 0x28u, item_name_addr);
+	write_s32(out->data + perm_foff + 0x2Cu, 0);
+	write_u32(out->data + perm_foff + 0x30u, item_handle);
+
+	snprintf(itmc_name, sizeof(itmc_name), "forge\\items\\placed_item_%d", (int)unique_seq);
+	return out_map_alloc_tag_instance(
+		out, tag_data_offset, scnr_off,
+		'itmc', 0xFFFFFFFFu, 0xFFFFFFFFu,
+		itmc_name, itmc_foff, 0u,
+		out_itmc_handle, out_itmc_name_addr);
+}
+
 static int32_t out_map_bake_non_native_object(
 	struct forge_byte_buf *out,
 	struct forge_source_map const *base_map,
@@ -6423,6 +7424,11 @@ static int32_t out_map_bake_non_native_object(
 	if (pobj->ocetags_json && pobj->ocetags_json_len > 0)
 	{
 		return out_map_bake_ocetags_package(
+			out, tag_data_offset, scnr_off, orig_vtx_size, orig_idx_size, pobj);
+	}
+	if (pobj->faber_profile_idx >= 0 && pobj->faber_tag_idx >= 0)
+	{
+		return out_map_bake_faber_vault_bundle(
 			out, tag_data_offset, scnr_off, orig_vtx_size, orig_idx_size, pobj);
 	}
 	if (pobj->xbox_map_path[0])
@@ -7441,6 +8447,8 @@ int forge_export_scenario_map(
 						pobj->v_scale = 1.0f;
 						pobj->ocetags_json = oce_json;
 						pobj->ocetags_json_len = oce_json_len;
+						pobj->faber_profile_idx = -1;
+						pobj->faber_tag_idx = -1;
 						pobj->baked_tag_idx = -1;
 
 						if (cb_ocetags_find_key_range(oce_json, 0, oce_json_len, "tags", &t_pos) &&
@@ -7538,7 +8546,29 @@ int forge_export_scenario_map(
 				if (src_map_find_tag_or_variant(&base_map, g, po->tag_path) >= 0)
 					continue;
 
-				/* 2. Otherwise locate the tag in an Xbox donor map (campaign or other MP map)
+				/* 2. Try baking from a Faber Tag Vault bundle (.fbrtag / faber_vault.bin) */
+				{
+					long fb_prof = -1, fb_tag = -1;
+					if (cb_find_faber_vault_bundle_for_tag(g, po->tag_path, &fb_prof, &fb_tag) &&
+						fb_prof >= 0 && fb_tag >= 0)
+					{
+						struct forge_pending_bake_obj *pobj = &pending_objs[pending_count];
+						memset(pobj, 0, sizeof(*pobj));
+						pobj->group_tag = g;
+						snprintf(pobj->tag_path, sizeof(pobj->tag_path), "%s", po->tag_path);
+						pobj->bounding_radius = 1.5f;
+						pobj->u_scale = 1.0f;
+						pobj->v_scale = 1.0f;
+						pobj->faber_profile_idx = fb_prof;
+						pobj->faber_tag_idx = fb_tag;
+						pobj->baked_tag_idx = -1;
+						cb_prescan_faber_vault_models(fb_prof, fb_tag, pobj, &extra_verts, &extra_strips);
+						pending_count++;
+						continue;
+					}
+				}
+
+				/* 3. Otherwise locate the tag in an Xbox donor map (campaign, MP map, or .fxtg bundle)
 				 * and pre-scan its 'mode' geometry so the full Xbox tag closure is baked into the saved .map! */
 				{
 					char xbox_path[512];
@@ -7558,6 +8588,8 @@ int forge_export_scenario_map(
 								pobj->bounding_radius = 1.5f;
 								pobj->u_scale = 1.0f;
 								pobj->v_scale = 1.0f;
+								pobj->faber_profile_idx = -1;
+								pobj->faber_tag_idx = -1;
 								pobj->baked_tag_idx = -1;
 								cb_prescan_xbox_models(&xmap, root_idx, pobj, &extra_verts, &extra_strips);
 								pending_count++;
@@ -7847,6 +8879,39 @@ int forge_export_scenario_map(
 				if (tag_idx >= 0)
 				{
 					int16_t pal;
+					if (g == 'weap' || g == 'eqip')
+					{
+						uint32_t itmc_handle = 0xFFFFFFFFu, itmc_name_addr = 0u;
+						int32_t itmc_idx = out_map_create_item_collection_for_tag(
+							&out, tag_data_offset, scnr_off, g, tag_idx, i,
+							&itmc_handle, &itmc_name_addr);
+						if (itmc_idx >= 0 && itmc_handle != 0xFFFFFFFFu)
+						{
+							uint32_t ne_eo = inplace_append_scenario_element(
+								&out, tag_data_offset, scnr_foff,
+								(uint32_t)offsetof(struct scenario, netgame_equipment), 144u);
+							if (ne_eo > 0 && out.data)
+							{
+								memset(out.data + ne_eo, 0, 144u);
+								write_u32(out.data + ne_eo + 0x00u, 0u);
+								write_s16(out.data + ne_eo + 0x04u, 12); /* _game_engine_all */
+								write_s16(out.data + ne_eo + 0x06u, 0);
+								write_s16(out.data + ne_eo + 0x08u, 0);
+								write_s16(out.data + ne_eo + 0x0Au, 0);
+								write_s16(out.data + ne_eo + 0x0Cu, po->team_index);
+								write_s16(out.data + ne_eo + 0x0Eu, 30); /* spawn_time = 30s */
+								write_f32(out.data + ne_eo + 0x40u, po->x);
+								write_f32(out.data + ne_eo + 0x44u, po->y);
+								write_f32(out.data + ne_eo + 0x48u, po->z);
+								write_f32(out.data + ne_eo + 0x4Cu, po->yaw);
+								write_u32(out.data + ne_eo + 0x50u, 'itmc');
+								write_u32(out.data + ne_eo + 0x54u, itmc_name_addr);
+								write_s32(out.data + ne_eo + 0x58u, 0);
+								write_u32(out.data + ne_eo + 0x5Cu, itmc_handle);
+								continue;
+							}
+						}
+					}
 					if (g == 'vehi')
 						tag_idx = out_map_clone_vehicle_tag_for_mp(&out, tag_data_offset, scnr_off, tag_idx, i);
 					pal = inplace_ensure_scenario_palette_entry(
@@ -7869,7 +8934,7 @@ int forge_export_scenario_map(
 							write_f32(out.data + eo + 0x1Cu, po->roll);
 							if (g == 'vehi')
 							{
-								out.data[eo + 0x5Au] = 0x3Fu;
+								write_u16(out.data + eo + 0x5Au, 0x3F3Fu);
 							}
 							else if (g == 'weap')
 							{

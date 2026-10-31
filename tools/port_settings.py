@@ -1013,6 +1013,7 @@ STRING_OVERRIDES.update({
         "Host a game on your LAN\\nonly.",
         "Play the campaign with a\\nfriend in split screen:\\nplayer 2 on a gamepad.",
         "Set all the attributes for your \\nmultiplayer gametypes and\\nkeep them for future use.",
+        "Browse and load your saved\\nForge and custom maps.",
     ],
     # (and the port's OPENCE: OpenCE's gametypes, port/linux/game/game_modes.c)
     "main_menu/gametype_select/var_gametype_banks": ["STANDARD", "OPENCE", "CUSTOM"],
@@ -1062,7 +1063,7 @@ STRING_OVERRIDES.update({
 OVERRIDE_ORIGINALS = {
     f"{PE}/profile_edit_descriptions": [0, None, None, None, None, None, None, 7, None],
     f"{MT}/multiplayer_options": [0, 1, 2, 3, None, 5, None, None],
-    f"{MT}/multiplayer_option_descriptions": [0, 1, None, None, 4, None, 5],
+    f"{MT}/multiplayer_option_descriptions": [0, 1, None, None, 4, None, 5, None],
     "main_menu/gametype_select/var_gametype_banks": [0, None, 2],
     "main_menu/settings_select/multiplayer_setup/item_options_edit/item_options_labels": [0, 1, 2, 3, 4] + [None] * 4,
     # (the first's note that infinite grenades work only with 4 players or
@@ -2641,10 +2642,10 @@ def _forge_screens() -> list:
                      ['<child widget="main_menu/current_profile_name"/>',
                       f'<child widget="{fbase}/forge_tag_right_item" x="22" y="2"/>'])
 
-    # 1c. ADD TAGS Step 1: Map Picker (SINGLEPLAYER / MULTIPLAYER / CUSTOM SINGLEPLAYER / CUSTOM MULTIPLAYER)
+    # 1c. ADD TAGS Step 1: Map Picker (CUSTOM SINGLEPLAYER / CUSTOM MULTIPLAYER)
     lines += _widget(f"{fbase}/forge_add_tags_map_kind_spinner",
                      [("type", "spinner"), ("width", 238), ("height", 22), ("flags", "left_right_tabs_items"),
-                      ("strings", "SINGLEPLAYER|MULTIPLAYER|CUSTOM SINGLEPLAYER|CUSTOM MULTIPLAYER"),
+                      ("strings", "CUSTOM SINGLEPLAYER|CUSTOM MULTIPLAYER"),
                       ("font", "ui\\large_ui"), ("color", "#FF2896FF"), ("align", "center"), ("text_y", 1),
                       ("header_bitmap", "bitmaps/arrow_sm_left"), ("footer_bitmap", "bitmaps/arrow_sm_right"),
                       ("header_bounds", "7 -6 19 0"), ("footer_bounds", "7 238 19 244")],
@@ -2712,42 +2713,59 @@ def _forge_screens() -> list:
                       f'<child widget="{fbase}/forge_add_tags_browser_list"/>',
                       f'<child widget="{MT}/header_forge"/>'])
 
-    # 1e. ADD TAGS Step 3: Name Custom Tag Prompt ([C] <user chosen name>) with CONFIRM / BACK
+    # 1e. ADD TAGS Step 3: Name Custom Tag Prompt ([C] <user chosen name>) with Clickable Text Box & CONFIRM / BACK
     lines += _widget(f"{fbase}/forge_name_tag_text_box",
                      [("type", "text"), ("controller", 1), ("width", 280), ("height", 159),
-                      ("bitmap", "bitmaps/alert_bkd"), ("font", "ui\\small_ui"),
-                      ("color", "#FF2896FF"), ("text_x", 9), ("text_y", 36)], [])
+                      ("bitmap", "bitmaps/alert_bkd"),
+                      ("text", "Enter Forge menu name for tag:"),
+                      ("font", "ui\\small_ui"), ("color", "#FF2896FF"), ("text_x", 12), ("text_y", 34)], [])
     lines += _widget(f"{fbase}/forge_name_tag_backdrop",
                      [("controller", 1), ("width", 640), ("height", 480),
                       ("bitmap", "bitmaps/semi_transparent_grey")],
                      [f'<child widget="{fbase}/forge_name_tag_text_box" x="192" y="176"/>',
                       '<child widget="error/header_attention" x="201" y="180"/>'])
+    lines += _widget(f"{fbase}/forge_name_tag_input_btn",
+                     [("type", "text"), ("width", 184), ("height", 28),
+                      ("bitmap", f"{MT}/forge_name_input_box"),
+                      ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("text_x", 10), ("text_y", 6)],
+                     ['<on event="a" run="port mods toggle"/>',
+                      '<on event="start" run="port mods toggle"/>',
+                      '<on event="b" run="NULL"/>',
+                      '<on event="back" run="NULL"/>',
+                      '<on event="left_mouse" run="mouse emit accept event"/>'])
     lines += _widget(f"{fbase}/forge_name_tag_confirm_btn",
                      [("type", "text"), ("width", 128), ("height", 24),
                       ("bitmap", "bitmaps/text_button_background"), ("text", "CONFIRM"),
                       ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
                      ['<on event="a" run="port mods save" back="true"/>',
                       '<on event="start" run="port mods save" back="true"/>',
+                      '<on event="b" run="NULL"/>',
+                      '<on event="back" run="NULL"/>',
                       '<on event="left_mouse" run="mouse emit accept event"/>'])
     lines += _widget(f"{fbase}/forge_name_tag_back_btn",
                      [("type", "text"), ("width", 128), ("height", 24),
                       ("bitmap", "bitmaps/text_button_background"), ("text", "BACK"),
                       ("font", "ui\\small_ui"), ("color", "#FFFFFFFF"), ("align", "center"), ("text_y", 2)],
-                     ['<on event="a" run="mouse emit back event"/>',
-                      '<on event="start" run="mouse emit back event"/>',
-                      '<on event="left_mouse" run="mouse emit back event"/>'])
+                     ['<on event="a" run="port mods close" back="true"/>',
+                      '<on event="start" run="port mods close" back="true"/>',
+                      '<on event="b" run="NULL"/>',
+                      '<on event="back" run="NULL"/>',
+                      '<on event="left_mouse" run="mouse emit accept event"/>'])
     lines += _widget(f"{fbase}/forge_name_tag_button_bar",
-                     [("type", "column_list"), ("width", 256), ("height", 20),
+                     [("type", "column_list"), ("width", 256), ("height", 95),
                       ("flags", "pass_unhandled_to_focused_child up_down_tabs_items left_right_tabs_items")],
                      ['<data input="load game list update"/>',
-                      f'<child widget="{fbase}/forge_name_tag_confirm_btn"/>',
-                      f'<child widget="{fbase}/forge_name_tag_back_btn" x="128"/>'])
+                      '<on event="b" run="NULL"/>',
+                      '<on event="back" run="NULL"/>',
+                      f'<child widget="{fbase}/forge_name_tag_input_btn" x="24" y="0"/>',
+                      f'<child widget="{fbase}/forge_name_tag_confirm_btn" x="0" y="71"/>',
+                      f'<child widget="{fbase}/forge_name_tag_back_btn" x="128" y="71"/>'])
     lines += _widget(f"{fbase}/forge_name_tag_screen",
                      [("width", 640), ("height", 480), ("flags", "pass_unhandled_to_focused_child")],
-                     ['<on event="b" back="true"/>',
-                      '<on event="back" back="true"/>',
+                     ['<on event="b" run="NULL"/>',
+                      '<on event="back" run="NULL"/>',
                       f'<child widget="{fbase}/forge_name_tag_backdrop"/>',
-                      f'<child widget="{fbase}/forge_name_tag_button_bar" x="194" y="309"/>'])
+                      f'<child widget="{fbase}/forge_name_tag_button_bar" x="194" y="238"/>'])
 
     # 1f. INSTALLED TAGS Browser Screen (SCENERY / VEHICLES / DEVICES / WEAPONS / EQUIPMENT)
     lines += _widget(f"{fbase}/forge_inst_cat_spinner",
@@ -2966,6 +2984,58 @@ def _forge_screens() -> list:
     return lines
 
 
+def _build_name_input_box_pngs(ce_dir: Path) -> None:
+    """Generates 184x28 rounded input box frames (inside 256x32 / 4x 1024x128 PNGs) from option_bkds_sm."""
+    out_dir = ce_dir / "port"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from PIL import Image
+        for idx in (0, 1):
+            src_path = ce_dir / f"shell/bitmaps/option_bkds_sm__{idx}.png"
+            dst_path = out_dir / f"name_input_box__{idx}.png"
+            with Image.open(src_path).convert("RGBA") as src:
+                w, h = src.size  # 1024x128 (4x of 256x32)
+                scale = w // 256
+                half_w = 92 * scale
+                dst = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                left_cap = src.crop((0, 0, half_w, h))
+                right_cap = src.crop((w - half_w, 0, w, h))
+                dst.paste(left_cap, (0, 0))
+                dst.paste(right_cap, (half_w, 0))
+                dst.save(dst_path, "PNG")
+        return
+    except Exception:
+        pass
+
+    import struct
+    import zlib
+
+    def write_rgba_png(path: Path, width: int, height: int, rows: list[bytes]) -> None:
+        raw = b"".join(b"\x00" + r for r in rows)
+        comp = zlib.compress(raw, 9)
+        def chunk(tag: bytes, data: bytes) -> bytes:
+            return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+        path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", comp) + chunk(b"IEND", b""))
+
+    for idx in (0, 1):
+        dst_path = out_dir / f"name_input_box__{idx}.png"
+        w, h = 256, 32
+        box_w, box_h = 184, 28
+        border = (114, 185, 255, 235) if idx == 1 else (40, 130, 214, 195)
+        fill = (20, 62, 112, 185) if idx == 1 else (7, 25, 48, 165)
+        rows = []
+        for y in range(h):
+            row = bytearray(w * 4)
+            if 1 <= y < box_h - 1:
+                for x in range(1, box_w - 1):
+                    on_edge = (y in (1, box_h - 2)) or (x in (1, box_w - 2))
+                    c = border if on_edge else fill
+                    row[x * 4:(x + 1) * 4] = bytes(c)
+            rows.append(bytes(row))
+        write_rgba_png(dst_path, w, h, rows)
+
+
 def generate_forge_menu_assets() -> None:
     """Updates the Gamemode & Forge menu XMLs, bitmaps.xml, and menus.json in port/assets/menus."""
     import json
@@ -2973,7 +3043,9 @@ def generate_forge_menu_assets() -> None:
     menus_dir = root / "port/assets/menus"
     ce_dir = menus_dir / "ce"
 
-    # 1. Update bitmaps.xml with header_standard, header_forge, header_gamemode, and gamemode_options
+    _build_name_input_box_pngs(ce_dir)
+
+    # 1. Update bitmaps.xml with header_standard, header_forge, header_gamemode, gamemode_options, and forge_name_input_box
     bitmaps_xml_path = ce_dir / "bitmaps.xml"
     bitmaps_text = bitmaps_xml_path.read_text(encoding="utf-8")
     extra_bitmaps = "\n".join([
@@ -2990,12 +3062,17 @@ def generate_forge_menu_assets() -> None:
         '\t\t<frame png="ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/game_type_select/rules_options__2.png" width="256" height="256"/>',
         '\t\t<frame png="ce/port/gamemode/forge_logo__0.png" width="256" height="256"/>',
         "\t</bitmap>",
+        f'\t<bitmap name="{MT}/forge_name_input_box">',
+        '\t\t<frame png="ce/port/name_input_box__0.png" width="256" height="32"/>',
+        '\t\t<frame png="ce/port/name_input_box__1.png" width="256" height="32"/>',
+        "\t</bitmap>",
     ])
     for bm_name in (
         f"{MT}/header_standard",
         f"{MT}/header_forge",
         f"{MT}/gamemode/header_gamemode",
         f"{MT}/gamemode/gamemode_options",
+        f"{MT}/forge_name_input_box",
     ):
         bitmaps_text = re.sub(
             rf'\t<bitmap name="{re.escape(bm_name)}">.*?\t</bitmap>\n?',
@@ -3080,6 +3157,8 @@ def generate_forge_menu_assets() -> None:
         files_set = set(manifest.get("files", []))
         for new_entry in (
             "ce/port/gamemode/forge_logo__0.png",
+            "ce/port/name_input_box__0.png",
+            "ce/port/name_input_box__1.png",
             f"ce/port/{MT}/header_standard.png",
             f"ce/port/{MT}/header_forge.png",
             f"ce/port/{MT}/gamemode/header_gamemode.png",

@@ -32,6 +32,10 @@ did not walk, and neither can this: such a tag is not bundled
 #include <stdlib.h>
 #include <string.h>
 
+#undef malloc
+#undef free
+#undef realloc
+
 /* ---------- constants */
 
 enum

@@ -1483,6 +1483,11 @@ void *custom_edition_cache_bundle_open(
 		return NULL;
 	}
 	loaded_bytes = report->tag_data_bytes + report->resource_tag_bytes;
+	tag_validate_custom_edition_infer_groups(
+		tag_cache,
+		(long)loaded_bytes,
+		report->tag_cache_bytes,
+		report->identity.name);
 	custom_edition_cache_combine_resource_offsets(tag_cache, loaded_bytes, COMBINED_BITMAPS_OFFSET,
 		COMBINED_SOUNDS_OFFSET);
 	if (sound_tags)

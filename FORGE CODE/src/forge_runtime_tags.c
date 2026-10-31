@@ -40,6 +40,7 @@
 #include "tag_names.h"
 #include "tag_preview.h"
 #include "../src/port_tag_profiles.h"
+#include "forge_marker_ftags_embed.h"
 extern int compress2(unsigned char *dest, unsigned long *destLen, const unsigned char *source, unsigned long sourceLen, int level);
 #include <xtl.h>
 #include "rasterizer/xbox/rasterizer_xbox.h"
@@ -1285,6 +1286,37 @@ static int ensure_xbox_map_decompressed_cache(
 		return 0;
 	}
 
+	/* 0. Check if OpenCE Forge/cached_tags/xbox_cache/<map_internal_name>.map already holds this decompressed Xbox map! */
+	if (map_internal_name[0])
+	{
+		char xcache_path[512];
+		FILE *xf;
+		snprintf(xcache_path, sizeof(xcache_path), "OpenCE Forge/cached_tags/xbox_cache/%s.map", map_internal_name);
+		xf = fopen(xcache_path, "rb");
+		if (xf)
+		{
+			uint8_t xhdr[2048];
+			long xsz = 0;
+			fseek(xf, 0, SEEK_END);
+			xsz = ftell(xf);
+			fseek(xf, 0, SEEK_SET);
+			if (xsz >= (long)(tag_off + tag_sz) && fread(xhdr, 1, sizeof(xhdr), xf) == sizeof(xhdr))
+			{
+				if (*(uint32_t const *)(xhdr + 0x00) == 0x68656164u &&
+					*(uint32_t const *)(xhdr + 0x04) == 5u &&
+					*(uint32_t const *)(xhdr + 0x10) == tag_off &&
+					*(uint32_t const *)(xhdr + 0x14) == tag_sz)
+				{
+					fclose(xf);
+					fclose(in_fp);
+					snprintf(out_cache_path, out_cache_sz, "%s", xcache_path);
+					return 1;
+				}
+			}
+			fclose(xf);
+		}
+	}
+
 	/* 1. Check if OpenCE's Xbox hard-drive cache (z:\cache000.map .. z:\cache005.map or z:\cache_donor.map)
 	 * already holds this decompressed Xbox map; if so, use it directly without duplicating! */
 	for (slot = 0; slot <= 6; slot++)
@@ -1343,8 +1375,17 @@ static int ensure_xbox_map_decompressed_cache(
 		fseek(in_fp, 2048L, SEEK_SET);
 	}
 
-	/* 3. Stream-decompress Xbox v5 map into OpenCE's z:\cache_donor.map */
-	platform_translate_path("z:\\cache_donor.map", out_cache_path, out_cache_sz);
+	/* 3. Stream-decompress Xbox v5 map into OpenCE Forge/cached_tags/xbox_cache/<map_internal_name>.map
+	 * so each Xbox map is only decompressed once and never overwrites a single shared donor file! */
+#ifdef _WIN32
+	CreateDirectoryA("OpenCE Forge", NULL);
+	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
+	CreateDirectoryA("OpenCE Forge/cached_tags/xbox_cache", NULL);
+#endif
+	if (map_internal_name[0])
+		snprintf(out_cache_path, out_cache_sz, "OpenCE Forge/cached_tags/xbox_cache/%s.map", map_internal_name);
+	else
+		platform_translate_path("z:\\cache_donor.map", out_cache_path, out_cache_sz);
 	{
 		FILE *tmp_out = fopen(out_cache_path, "wb");
 		z_stream strm;
@@ -1354,6 +1395,11 @@ static int ensure_xbox_map_decompressed_cache(
 		int zret = Z_OK;
 		int decomp_ok = 0;
 
+		if (!tmp_out)
+		{
+			platform_translate_path("z:\\cache_donor.map", out_cache_path, out_cache_sz);
+			tmp_out = fopen(out_cache_path, "wb");
+		}
 		if (!tmp_out)
 		{
 			fclose(in_fp);
@@ -1691,10 +1737,13 @@ static void forge_delete_files_matching(char const *dir_path, char const *patter
 #endif
 }
 
+static void close_runtime_xbox_donor(void);
+
 int forge_reset_stock_tag_cache(void)
 {
 	int slot;
 
+	close_runtime_xbox_donor();
 	remove("OpenCE Forge/cached_tags/xbox_catalog.txt");
 	remove("OpenCE Forge/cached_tags/catalog.txt");
 	remove("OpenCE Forge/credits.md");
@@ -1983,7 +2032,7 @@ void forge_runtime_init(void)
  * ============================================================================ */
 
 #define FORGE_MAX_HW_PARTS       48
-#define FORGE_MAX_DYNAMIC_TAGS   256
+#define FORGE_MAX_DYNAMIC_TAGS   1024
 #define FORGE_MAX_PHYS_ALLOCS    8192
 #define FORGE_MAX_DYN_SOUND_PERMS 4096
 
@@ -2081,10 +2130,37 @@ static int s_marker_meshes_loaded_flag = 0;
 static long s_monitor_bipd_handle = NONE;
 static int s_monitor_resolved = 0;
 static int s_local_monitor_drawn_this_frame = 0;
+static int s_last_preview_chosen_idx = -1;
+static unsigned long s_last_preview_cursor_ms = 0;
+
+static struct
+{
+	char path[512];
+	FILE *fp;
+	uint8_t *tag_buf;
+	uint32_t tag_off;
+	uint32_t tag_sz;
+} s_runtime_xbox_donor;
+
+static void close_runtime_xbox_donor(void)
+{
+	if (s_runtime_xbox_donor.fp)
+		fclose(s_runtime_xbox_donor.fp);
+	if (s_runtime_xbox_donor.tag_buf)
+		free(s_runtime_xbox_donor.tag_buf);
+	memset(&s_runtime_xbox_donor, 0, sizeof(s_runtime_xbox_donor));
+}
 
 void forge_runtime_on_map_unload(void)
 {
 	int i;
+
+	close_runtime_xbox_donor();
+
+	/* Dispose injected Custom Edition model buffers FIRST while their gbxmodel
+	 * part definitions in s_forge_phys_allocs are still mapped in memory! */
+	custom_edition_injected_models_dispose();
+
 	for (i = 0; i < s_forge_phys_allocs.count; i++)
 	{
 		if (s_forge_phys_allocs.ptrs[i])
@@ -2095,8 +2171,9 @@ void forge_runtime_on_map_unload(void)
 	s_marker_meshes_loaded_flag = 0;
 	s_monitor_bipd_handle = NONE;
 	s_monitor_resolved = 0;
-	custom_edition_injected_models_dispose();
 	s_local_monitor_drawn_this_frame = 0;
+	s_last_preview_chosen_idx = -1;
+	s_last_preview_cursor_ms = 0;
 
 	if (s_dyn_tags.saved_base_instances)
 	{
@@ -2658,19 +2735,24 @@ static void xbox_visit_tag_index(struct xbox_runtime_closure *cl, int32_t abs_id
 		return;
 	}
 
-	/* Strictly keep Xbox tags using Xbox bitmaps, shaders, models, and sounds from their source Xbox .map!
-	 * Only reuse non-visual/non-audio shared dependencies if we are on a stock Xbox map (never on a CE map). */
-	if (cl->order_count > 0 && !custom_edition_cache_tags_loaded() && !cl->is_red_beam_variant &&
-		grp != 'bitm' && grp != 'mode' && grp != 'snd!' && grp != 'lsnd' &&
-		grp != 'shdr' && grp != 'senv' && grp != 'soso' && grp != 'sotr' &&
-		grp != 'schi' && grp != 'scex' && grp != 'swat' && grp != 'sgla' &&
-		grp != 'smet' && grp != 'spla')
+	/* Reuse any dependency tag that was already dynamically injected during this session,
+	 * or reuse shared non-visual/non-audio base-map dependencies on stock Xbox maps. */
+	if (cl->order_count > 0 && !cl->is_red_beam_variant)
 	{
 		long ex = tag_loaded((long)grp, tname);
 		if (ex != NONE)
 		{
-			cl->runtime_handles[abs_idx] = ex;
-			return;
+			long base_cnt = (long)forge_get_base_map_tag_count();
+			if ((base_cnt > 0 && (ex & 0xFFFF) >= base_cnt) ||
+				(!custom_edition_cache_tags_loaded() &&
+				 grp != 'bitm' && grp != 'mode' && grp != 'snd!' && grp != 'lsnd' &&
+				 grp != 'shdr' && grp != 'senv' && grp != 'soso' && grp != 'sotr' &&
+				 grp != 'schi' && grp != 'scex' && grp != 'swat' && grp != 'sgla' &&
+				 grp != 'smet' && grp != 'spla'))
+			{
+				cl->runtime_handles[abs_idx] = ex;
+				return;
+			}
 		}
 	}
 
@@ -2993,11 +3075,12 @@ static long load_native_xbox_tag_from_decompressed_map(
 	char const *req_path,
 	uint32_t *out_actual_group)
 {
-	FILE *f;
+	FILE *f = NULL;
 	uint8_t hdr[2048];
-	uint32_t tag_off, tag_sz, inst_addr;
+	uint32_t tag_off = 0, tag_sz = 0, inst_addr;
 	int32_t tag_count, i, root_abs_idx = -1;
-	uint8_t *tag_buf;
+	uint8_t *tag_buf = NULL;
+	int keep_cached = 0;
 	struct xbox_runtime_closure cl;
 	long root_handle = NONE;
 	int is_red_beam_variant = (req_group == 'mach' &&
@@ -3006,33 +3089,58 @@ static long load_native_xbox_tag_from_decompressed_map(
 		? "levels\\a30\\devices\\beam emitter\\beam emitter"
 		: req_path;
 
-	f = fopen(cache_map_path, "rb");
-	if (!f)
+	if (!cache_map_path || !cache_map_path[0])
 		return NONE;
-	if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr))
-	{
-		fclose(f);
-		return NONE;
-	}
-	if (*(uint32_t const *)(hdr + 0x00) != 0x68656164u || *(uint32_t const *)(hdr + 0x04) != 5u)
-	{
-		fclose(f);
-		return NONE;
-	}
-	tag_off = *(uint32_t const *)(hdr + 0x10);
-	tag_sz = *(uint32_t const *)(hdr + 0x14);
-	if (tag_off < 2048u || tag_sz < 64u || tag_sz > 64u * 1024u * 1024u)
-	{
-		fclose(f);
-		return NONE;
-	}
 
-	tag_buf = (uint8_t *)malloc(tag_sz);
-	if (!tag_buf || fseek(f, (long)tag_off, SEEK_SET) != 0 || fread(tag_buf, 1, tag_sz, f) != tag_sz)
+	if (s_runtime_xbox_donor.fp && s_runtime_xbox_donor.tag_buf &&
+		_stricmp(s_runtime_xbox_donor.path, cache_map_path) == 0)
 	{
-		free(tag_buf);
-		fclose(f);
-		return NONE;
+		f = s_runtime_xbox_donor.fp;
+		tag_buf = s_runtime_xbox_donor.tag_buf;
+		tag_off = s_runtime_xbox_donor.tag_off;
+		tag_sz = s_runtime_xbox_donor.tag_sz;
+		keep_cached = 1;
+	}
+	else
+	{
+		f = fopen(cache_map_path, "rb");
+		if (!f)
+			return NONE;
+		if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr))
+		{
+			fclose(f);
+			return NONE;
+		}
+		if (*(uint32_t const *)(hdr + 0x00) != 0x68656164u || *(uint32_t const *)(hdr + 0x04) != 5u)
+		{
+			fclose(f);
+			return NONE;
+		}
+		tag_off = *(uint32_t const *)(hdr + 0x10);
+		tag_sz = *(uint32_t const *)(hdr + 0x14);
+		if (tag_off < 2048u || tag_sz < 64u || tag_sz > 64u * 1024u * 1024u)
+		{
+			fclose(f);
+			return NONE;
+		}
+
+		tag_buf = (uint8_t *)malloc(tag_sz);
+		if (!tag_buf || fseek(f, (long)tag_off, SEEK_SET) != 0 || fread(tag_buf, 1, tag_sz, f) != tag_sz)
+		{
+			free(tag_buf);
+			fclose(f);
+			return NONE;
+		}
+		if (strstr(cache_map_path, "cache_donor.map") == NULL)
+		{
+			close_runtime_xbox_donor();
+			snprintf(s_runtime_xbox_donor.path, sizeof(s_runtime_xbox_donor.path), "%s", cache_map_path);
+			s_runtime_xbox_donor.fp = f;
+			s_runtime_xbox_donor.tag_buf = tag_buf;
+			s_runtime_xbox_donor.tag_off = tag_off;
+			s_runtime_xbox_donor.tag_sz = tag_sz;
+			keep_cached = 1;
+		}
 	}
 
 	inst_addr = *(uint32_t const *)(tag_buf + 0x00);
@@ -3047,8 +3155,11 @@ static long load_native_xbox_tag_from_decompressed_map(
 
 	if (tag_count <= 0 || tag_count > 16384 || cl.inst_off + (uint32_t)tag_count * 32u > tag_sz)
 	{
-		free(tag_buf);
-		fclose(f);
+		if (!keep_cached)
+		{
+			free(tag_buf);
+			fclose(f);
+		}
 		return NONE;
 	}
 
@@ -3072,8 +3183,11 @@ static long load_native_xbox_tag_from_decompressed_map(
 
 	if (root_abs_idx < 0)
 	{
-		free(tag_buf);
-		fclose(f);
+		if (!keep_cached)
+		{
+			free(tag_buf);
+			fclose(f);
+		}
 		return NONE;
 	}
 
@@ -3087,8 +3201,11 @@ static long load_native_xbox_tag_from_decompressed_map(
 		free(cl.order);
 		free(cl.runtime_handles);
 		free(cl.cloned_roots);
-		free(tag_buf);
-		fclose(f);
+		if (!keep_cached)
+		{
+			free(tag_buf);
+			fclose(f);
+		}
 		return NONE;
 	}
 	for (i = 0; i < tag_count; i++)
@@ -3127,6 +3244,12 @@ static long load_native_xbox_tag_from_decompressed_map(
 				snprintf(reg_name, sizeof(reg_name), "%s", req_path);
 			else
 				snprintf(reg_name, sizeof(reg_name), "%s__red", tname);
+		}
+		else if (abs_idx != root_abs_idx && tag_loaded((long)grp, tname) != NONE)
+		{
+			long ex_cnt = 0;
+			cache_files_tag_instances(&ex_cnt);
+			snprintf(reg_name, sizeof(reg_name), "%s__f%ld", tname, ex_cnt);
 		}
 		else
 		{
@@ -3571,8 +3694,11 @@ static long load_native_xbox_tag_from_decompressed_map(
 	free(cl.order);
 	free(cl.runtime_handles);
 	free(cl.cloned_roots);
-	free(tag_buf);
-	fclose(f);
+	if (!keep_cached)
+	{
+		free(tag_buf);
+		fclose(f);
+	}
 	return root_handle;
 }
 
@@ -3684,26 +3810,27 @@ static long load_native_xbox_tag_runtime(
 	if (!req_path || !req_path[0])
 		return NONE;
 
-	/* 1. Check OpenCE's Xbox hard-drive cache (z:\cache000.map .. z:\cache005.map and z:\cache_donor.map) */
-	for (slot = 0; slot <= 6; slot++)
+	/* 0. If the active in-memory donor map already contains this tag, load from it without re-reading disk! */
+	if (s_runtime_xbox_donor.fp && s_runtime_xbox_donor.tag_buf && s_runtime_xbox_donor.path[0])
 	{
-		char z_xbox[64];
-		char z_path[512];
-		long hdl;
-		if (slot < 6)
-			snprintf(z_xbox, sizeof(z_xbox), "z:\\cache00%d.map", slot);
-		else
-			snprintf(z_xbox, sizeof(z_xbox), "z:\\cache_donor.map");
-		platform_translate_path(z_xbox, z_path, sizeof(z_path));
-		hdl = load_native_xbox_tag_from_decompressed_map(z_path, req_group, req_path, out_actual_group);
+		long hdl = load_native_xbox_tag_from_decompressed_map(
+			s_runtime_xbox_donor.path, req_group, req_path, out_actual_group);
 		if (hdl != NONE)
 			return hdl;
 	}
 
-	/* 2. Check exact donor map(s) indexed in OpenCE Forge/credits.md first so we never decompress unrelated maps */
+	/* 1. Check exact donor map(s) indexed in OpenCE Forge/credits.md FIRST so we never scan unrelated maps */
 	stem_count = find_donor_map_stems_from_credits(req_group, req_path, candidate_stems, 8);
 	for (s = 0; s < stem_count; s++)
 	{
+		char xcache_cand[512];
+		snprintf(xcache_cand, sizeof(xcache_cand), "OpenCE Forge/cached_tags/xbox_cache/%s.map", candidate_stems[s]);
+		{
+			long hdl = load_native_xbox_tag_from_decompressed_map(
+				xcache_cand, req_group, req_path, out_actual_group);
+			if (hdl != NONE)
+				return hdl;
+		}
 		for (d = 0; d < (int)(sizeof(s_xbox_map_dirs) / sizeof(s_xbox_map_dirs[0])); d++)
 		{
 			char full_path[512];
@@ -3717,6 +3844,22 @@ static long load_native_xbox_tag_runtime(
 					return hdl;
 			}
 		}
+	}
+
+	/* 2. Check OpenCE's Xbox hard-drive cache (z:\cache000.map .. z:\cache005.map and z:\cache_donor.map) */
+	for (slot = 0; slot <= 6; slot++)
+	{
+		char z_xbox[64];
+		char z_path[512];
+		long hdl;
+		if (slot < 6)
+			snprintf(z_xbox, sizeof(z_xbox), "z:\\cache00%d.map", slot);
+		else
+			snprintf(z_xbox, sizeof(z_xbox), "z:\\cache_donor.map");
+		platform_translate_path(z_xbox, z_path, sizeof(z_path));
+		hdl = load_native_xbox_tag_from_decompressed_map(z_path, req_group, req_path, out_actual_group);
+		if (hdl != NONE)
+			return hdl;
 	}
 
 	/* 3. Fallback: scan Xbox maps in maps/ */
@@ -4015,12 +4158,25 @@ static long load_faber_vault_tag_bundle_runtime(
 			p1 = NONE;
 		}
 
-		datums[ti] = append_runtime_tag_instance(
-			(long)actual_grp,
-			(long)p0,
-			(long)p1,
-			tname,
-			root_buf);
+		{
+			char reg_name[256];
+			if (ti > 0 && tag_loaded((long)actual_grp, tname) != NONE)
+			{
+				long ex_cnt = 0;
+				cache_files_tag_instances(&ex_cnt);
+				snprintf(reg_name, sizeof(reg_name), "%s__f%ld", tname, ex_cnt);
+			}
+			else
+			{
+				snprintf(reg_name, sizeof(reg_name), "%s", tname);
+			}
+			datums[ti] = append_runtime_tag_instance(
+				(long)actual_grp,
+				(long)p0,
+				(long)p1,
+				reg_name,
+				root_buf);
+		}
 		if (datums[ti] != NONE)
 			is_new_tag[ti] = 1;
 	}
@@ -4380,13 +4536,13 @@ static long register_dynamic_cached_tag(uint32_t group_tag, char const *tag_path
 	int i;
 	long native_idx;
 
-	/* Check if already registered for the current map */
+	/* Check if already registered (or negative-cached) for the current map */
 	for (i = 0; i < s_dyn_tags.count; i++)
 	{
 		if (s_dyn_tags.entries[i].group_tag == group_tag &&
 			_stricmp(s_dyn_tags.entries[i].tag_path, tag_path) == 0)
 		{
-			if (out_actual_group)
+			if (out_actual_group && s_dyn_tags.entries[i].definition_index != NONE)
 				*out_actual_group = (uint32_t)tag_get_group_tag(s_dyn_tags.entries[i].definition_index);
 			return s_dyn_tags.entries[i].definition_index;
 		}
@@ -4395,7 +4551,6 @@ static long register_dynamic_cached_tag(uint32_t group_tag, char const *tag_path
 	if (s_dyn_tags.count >= FORGE_MAX_DYNAMIC_TAGS)
 		return NONE;
 
-	/* 1. Check if an exact .ocetags package exists in custom_tags/ and load its complete tag tree natively! */
 	/* 0a. Check compressed Faber Tag Vault (.fbrtag + faber_vault.bin) in OpenCE Forge/tag_vault/ */
 	native_idx = load_faber_vault_tag_bundle_runtime(group_tag, tag_path, out_actual_group);
 	if (native_idx != NONE)
@@ -4416,32 +4571,52 @@ static long register_dynamic_cached_tag(uint32_t group_tag, char const *tag_path
 	if (native_idx != NONE)
 		return native_idx;
 
+	/* Negative-cache missing tag so we never re-scan disk on every frame */
+	if (s_dyn_tags.count < FORGE_MAX_DYNAMIC_TAGS)
+	{
+		struct forge_dynamic_tag_entry *entry = &s_dyn_tags.entries[s_dyn_tags.count++];
+		memset(entry, 0, sizeof(*entry));
+		entry->group_tag = group_tag;
+		snprintf(entry->tag_path, sizeof(entry->tag_path), "%s", tag_path);
+		entry->definition_index = NONE;
+	}
+
 	return NONE;
 }
 
-long forge_resolve_engine_tag(uint32_t group_tag, char const *tag_path, uint32_t *out_actual_group)
+static long forge_try_get_loaded_engine_tag(
+	uint32_t group_tag,
+	char const *tag_path,
+	uint32_t *out_actual_group,
+	int *out_known_missing)
 {
 	long idx;
 	int i;
 
 	if (out_actual_group)
 		*out_actual_group = group_tag;
+	if (out_known_missing)
+		*out_known_missing = 0;
 	if (!tag_path || !tag_path[0])
 		return NONE;
 
-	/* 0. If already dynamically registered for this map (e.g. from custom_tags\*.ocetags), return it directly */
 	for (i = 0; i < s_dyn_tags.count; i++)
 	{
 		if (s_dyn_tags.entries[i].group_tag == group_tag &&
 			_stricmp(s_dyn_tags.entries[i].tag_path, tag_path) == 0)
 		{
+			if (s_dyn_tags.entries[i].definition_index == NONE)
+			{
+				if (out_known_missing)
+					*out_known_missing = 1;
+				return NONE;
+			}
 			if (out_actual_group)
 				*out_actual_group = (uint32_t)tag_get_group_tag(s_dyn_tags.entries[i].definition_index);
 			return s_dyn_tags.entries[i].definition_index;
 		}
 	}
 
-	/* 1. Check if the exact tag (or its native _mp / SP counterpart) is already in the map */
 	idx = find_native_or_mp_variant_tag(group_tag, tag_path);
 	if (idx != NONE)
 	{
@@ -4449,13 +4624,23 @@ long forge_resolve_engine_tag(uint32_t group_tag, char const *tag_path, uint32_t
 			patch_vehicle_tag_for_player_driving(idx, tag_path);
 		return idx;
 	}
+	return NONE;
+}
 
-	/* 2. Dynamically load from custom_tags\*.ocetags or Xbox map cache into global_tag_instances! */
-	idx = register_dynamic_cached_tag(group_tag, tag_path, out_actual_group);
-	if (idx != NONE)
+long forge_resolve_engine_tag(uint32_t group_tag, char const *tag_path, uint32_t *out_actual_group)
+{
+	long idx;
+	int known_missing = 0;
+
+	idx = forge_try_get_loaded_engine_tag(group_tag, tag_path, out_actual_group, &known_missing);
+	if (idx != NONE || known_missing)
 		return idx;
 
-	return NONE;
+	if (!tag_path || !tag_path[0])
+		return NONE;
+
+	/* Dynamically load from custom_tags\*.ocetags or Xbox map cache into global_tag_instances! */
+	return register_dynamic_cached_tag(group_tag, tag_path, out_actual_group);
 }
 
 static int ocetags_json_find_key_range(char const *buf, size_t start, size_t end, char const *key, size_t *out_val_pos)
@@ -6783,7 +6968,9 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 						if (oname && oname[0])
 						{
 							size_t tlen = strlen(tpath);
-							if (_stricmp(oname, tpath) != 0 && _strnicmp(oname, tpath, tlen) != 0)
+							if (_stricmp(oname, tpath) != 0 &&
+								_strnicmp(oname, tpath, tlen) != 0 &&
+								!(grp == 'vehi' && _strnicmp(oname, "forge\\vehicles\\placed_unit_", 27) == 0))
 								continue;
 						}
 						dx = obj->object.position.x - x;
@@ -7349,14 +7536,62 @@ static void ensure_objective_marker_meshes_loaded(void)
 		"OpenCE Forge/cached_tags/markers/koth_beam.ftag"
 	};
 	int k;
+	int all_valid = 1;
 
-	if (s_marker_meshes.loaded && s_marker_meshes_loaded_flag)
-		return;
+	if (s_marker_meshes.loaded)
+	{
+		for (k = 0; k < NUMBER_OF_MARKER_MESH_KINDS; k++)
+		{
+			if (!s_marker_meshes.meshes[k].valid)
+			{
+				all_valid = 0;
+				break;
+			}
+		}
+		if (all_valid)
+		{
+			s_marker_meshes_loaded_flag = 1;
+			return;
+		}
+	}
 	s_marker_meshes.loaded = 1;
 	s_marker_meshes_loaded_flag = 1;
 
+	CreateDirectoryA("OpenCE Forge", NULL);
+	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
+	CreateDirectoryA("OpenCE Forge/cached_tags/markers", NULL);
+
 	for (k = 0; k < NUMBER_OF_MARKER_MESH_KINDS; k++)
 	{
+		FILE *test_fp;
+
+		if (s_marker_meshes.meshes[k].valid && s_marker_meshes.meshes[k].part_count > 0)
+			continue;
+
+		test_fp = fopen(s_files[k], "rb");
+		if (test_fp)
+		{
+			fclose(test_fp);
+		}
+		else if (k < 8 && s_embedded_marker_ftags[k].comp_data && s_embedded_marker_ftags[k].uncomp_size > 0)
+		{
+			unsigned long raw_len = (unsigned long)s_embedded_marker_ftags[k].uncomp_size;
+			uint8_t *raw_buf = (uint8_t *)malloc((size_t)raw_len);
+			if (raw_buf)
+			{
+				if (z_uncompress(raw_buf, &raw_len, s_embedded_marker_ftags[k].comp_data, (unsigned long)s_embedded_marker_ftags[k].comp_size) == 0)
+				{
+					FILE *out_fp = fopen(s_files[k], "wb");
+					if (out_fp)
+					{
+						fwrite(raw_buf, 1, (size_t)raw_len, out_fp);
+						fclose(out_fp);
+					}
+				}
+				free(raw_buf);
+			}
+		}
+
 		s_marker_meshes.meshes[k].valid = 0;
 		s_marker_meshes.meshes[k].part_count = 0;
 		s_marker_meshes.meshes[k].radius = 0.45f;
@@ -7859,7 +8094,30 @@ static void render_spawn_palette_3d_preview(long object_index, void const *light
 		}
 	}
 
-	obj_def_idx = forge_resolve_engine_tag(entry->group_tag, entry->tag_path, &actual_grp);
+	{
+		int known_missing = 0;
+		unsigned long now_ms = system_milliseconds();
+
+		if (chosen_idx != s_last_preview_chosen_idx)
+		{
+			s_last_preview_chosen_idx = chosen_idx;
+			s_last_preview_cursor_ms = now_ms;
+		}
+
+		obj_def_idx = forge_try_get_loaded_engine_tag(
+			entry->group_tag,
+			entry->tag_path,
+			&actual_grp,
+			&known_missing);
+		if (obj_def_idx == NONE && !known_missing)
+		{
+			/* Debounce disk-backed dynamic tag loading while the user is actively scrolling
+			 * through the Spawn Palette so scrolling never hitches on intermediate items! */
+			if ((unsigned long)(now_ms - s_last_preview_cursor_ms) < 200u)
+				return;
+			obj_def_idx = forge_resolve_engine_tag(entry->group_tag, entry->tag_path, &actual_grp);
+		}
+	}
 	if (obj_def_idx == NONE)
 		return;
 
@@ -8814,12 +9072,16 @@ static void upsert_custom_catalog_manifest_line(
 	char const *custom_name)
 {
 	FILE *in_fp;
-	char lines[512][512];
+	char (*lines)[512];
 	int line_count = 0;
 	int updated = 0;
 	int i;
 	char grp_str[5];
 	FILE *out_fp;
+
+	lines = (char (*)[512])malloc(512u * sizeof(*lines));
+	if (!lines)
+		return;
 
 	grp_str[0] = (char)((grp >> 24) & 0xFF);
 	grp_str[1] = (char)((grp >> 16) & 0xFF);
@@ -8869,6 +9131,7 @@ static void upsert_custom_catalog_manifest_line(
 			fprintf(out_fp, "%s\n", lines[i]);
 		fclose(out_fp);
 	}
+	free(lines);
 }
 
 static int extract_compressed_xbox_map_tag(
@@ -9242,7 +9505,6 @@ int forge_ui_extract_selected_map_tag(int category_tab, int list_index, char con
 		byte *sounds = NULL;
 		long t_i;
 		struct browser_ce_map_header *reopened;
-		unsigned char *made = NULL;
 		unsigned long tags_size;
 		byte *copy_tags = NULL;
 		struct tag_bundle_loaded loaded;
@@ -9287,8 +9549,7 @@ int forge_ui_extract_selected_map_tag(int category_tab, int list_index, char con
 		if (s_map_browser.names_made)
 			free(s_map_browser.names_made);
 		s_map_browser.names_made = NULL;
-		tag_names_restore(reopened, s_map_browser.map_name, &made);
-		s_map_browser.names_made = NULL;
+		tag_names_restore(reopened, s_map_browser.map_name, NULL);
 
 		custom_edition_cache_bundle_source(&source);
 		memset(&report, 0, sizeof(report));
@@ -9842,13 +10103,26 @@ enum
 	_bitmap_swizzled_bit = 3
 };
 
+static unsigned long preview_bitmap_level_bytes(short format, short bpp, short width, short height)
+{
+	unsigned long w = (width > 0) ? (unsigned long)width : 1ul;
+	unsigned long h = (height > 0) ? (unsigned long)height : 1ul;
+	if (bpp > 0)
+		return w * h * (unsigned long)bpp;
+	if (format == _bitmap_format_dxt1)
+		return ((w + 3ul) / 4ul) * ((h + 3ul) / 4ul) * 8ul;
+	if (format == _bitmap_format_dxt3 || format == _bitmap_format_dxt5)
+		return ((w + 3ul) / 4ul) * ((h + 3ul) / 4ul) * 16ul;
+	return 0ul;
+}
+
 static int preview_decode_bitmap_texture(
 	struct bitmap_data const *bitmap,
 	boolean (*read_fn)(void *ctx, unsigned long offset, unsigned long size, void *buf),
 	void *read_ctx,
 	struct tag_injector_texture *out_tex)
 {
-	struct bitmap_data mip_bmp;
+	short mip_w, mip_h;
 	short level = 0;
 	unsigned long offset;
 	unsigned long size;
@@ -9888,18 +10162,18 @@ static int preview_decode_bitmap_texture(
 		return 0;
 	}
 
-	mip_bmp = *bitmap;
-	mip_bmp.flags &= (uint16_t)~(1u << 3);
+	mip_w = bitmap->width;
+	mip_h = bitmap->height;
 	offset = (unsigned long)bitmap->pixels_offset;
 	while (level < bitmap->mipmap_count &&
-		   (mip_bmp.width > FORGE_PREVIEW_TEXTURE_SIZE || mip_bmp.height > FORGE_PREVIEW_TEXTURE_SIZE))
+		   (mip_w > FORGE_PREVIEW_TEXTURE_SIZE || mip_h > FORGE_PREVIEW_TEXTURE_SIZE))
 	{
-		offset += (unsigned long)bitmap_mipmap_get_pixel_data_size(&mip_bmp, 0);
-		mip_bmp.width = (short)((mip_bmp.width >> 1) > 1 ? (mip_bmp.width >> 1) : 1);
-		mip_bmp.height = (short)((mip_bmp.height >> 1) > 1 ? (mip_bmp.height >> 1) : 1);
+		offset += preview_bitmap_level_bytes(bitmap->format, bpp, mip_w, mip_h);
+		mip_w = (short)((mip_w >> 1) > 1 ? (mip_w >> 1) : 1);
+		mip_h = (short)((mip_h >> 1) > 1 ? (mip_h >> 1) : 1);
 		level++;
 	}
-	size = (unsigned long)bitmap_mipmap_get_pixel_data_size(&mip_bmp, 0);
+	size = preview_bitmap_level_bytes(bitmap->format, bpp, mip_w, mip_h);
 	if (!size || offset - (unsigned long)bitmap->pixels_offset > (unsigned long)bitmap->pixels_size ||
 		size > (unsigned long)bitmap->pixels_size - (offset - (unsigned long)bitmap->pixels_offset))
 		return 0;
@@ -9922,14 +10196,14 @@ static int preview_decode_bitmap_texture(
 		}
 		{
 			short sx, sy;
-			for (sy = 0; sy < mip_bmp.height; sy++)
+			for (sy = 0; sy < mip_h; sy++)
 			{
-				for (sx = 0; sx < mip_bmp.width; sx++)
+				for (sx = 0; sx < mip_w; sx++)
 				{
 					long swz = 0;
-					bitmap_swizzle_vector2d(mip_bmp.width, mip_bmp.height, sx, sy, &swz);
+					bitmap_swizzle_vector2d(mip_w, mip_h, sx, sy, &swz);
 					if (swz >= 0 && (unsigned long)(swz + 1) * (unsigned long)bpp <= size)
-						memcpy(unswizzled + ((long)sy * mip_bmp.width + sx) * bpp, pixels + swz * bpp, (size_t)bpp);
+						memcpy(unswizzled + ((long)sy * mip_w + sx) * bpp, pixels + swz * bpp, (size_t)bpp);
 				}
 			}
 		}
@@ -9937,8 +10211,8 @@ static int preview_decode_bitmap_texture(
 		pixels = unswizzled;
 	}
 
-	out_tex->width = mip_bmp.width;
-	out_tex->height = mip_bmp.height;
+	out_tex->width = mip_w;
+	out_tex->height = mip_h;
 	out_tex->format = bitmap->format;
 	out_tex->size = size;
 	out_tex->pixels = pixels;
@@ -10305,13 +10579,13 @@ static int build_preview_mesh_from_ce_source(
 	for (s_i = 0; s_i < FORGE_PREVIEW_MAX_SHADERS; s_i++)
 		shader_to_mat[s_i] = -2;
 
-	if (model->nodes.count > 0 && model->nodes.count <= 64 && model->nodes.address)
+	if (model->nodes.count > 0 && model->nodes.count <= 256 && model->nodes.address)
 	{
 		world_nodes = (struct forge_preview_node_xform *)malloc((size_t)model->nodes.count * sizeof(*world_nodes));
 		if (world_nodes)
 			compute_preview_world_nodes(model->nodes.count, (uint8_t const *)model->nodes.address, world_nodes);
 	}
-	has_local_nodes = TEST_FLAG(model->flags, 2) ? 1 : 0;
+	has_local_nodes = TEST_FLAG(model->flags, 1) ? 1 : 0;
 
 	for (r_i = 0; r_i < (model->regions.count > 0 ? model->regions.count : 1); r_i++)
 	{
@@ -10357,8 +10631,8 @@ static int build_preview_mesh_from_ce_source(
 			uint32_t strip_off = *(uint32_t const *)(part + 0x4Cu);
 			int32_t vtx_cnt = *(int32_t const *)(part + 0x58u);
 			uint32_t vtx_off = *(uint32_t const *)(part + 0x64u);
-			int16_t loc_node_cnt = *(int16_t const *)(part + 0x68u);
-			uint8_t const *loc_nodes = part + 0x6Au;
+			int16_t loc_node_cnt = (int16_t)part[0x6Bu];
+			uint8_t const *loc_nodes = part + 0x6Cu;
 			short mat_idx = -1;
 
 			if (shdr_idx >= 0 && shdr_idx < model->shaders.count &&

@@ -1787,6 +1787,73 @@ static struct object_datum *forge_valid_object_get(long object_index)
 	return (struct object_datum *)object_try_and_get_and_verify_type(object_index, (unsigned long)-1);
 }
 
+static boolean forge_collision_test_vector(
+	unsigned long flags,
+	real_point3d const *point,
+	real_vector3d const *vector,
+	long ignore_object_index,
+	struct collision_result *collision)
+{
+	long temp_hidden[64];
+	int hidden_count = 0;
+	int i;
+	boolean res;
+
+	/* Temporarily mark the local player's unit, any Monitor-mode player units, and ignore_object_index
+	 * with _object_invisible_bit so collision_test_vector / object_test_vector skips all of them. */
+	{
+		long local_unit = player_control_get_unit_index(0);
+		if (local_unit != NONE && hidden_count < 64)
+		{
+			struct object_datum *lo = forge_valid_object_get(local_unit);
+			if (lo && !TEST_FLAG(lo->object.flags, _object_invisible_bit))
+			{
+				SET_FLAG(lo->object.flags, _object_invisible_bit, TRUE);
+				temp_hidden[hidden_count++] = local_unit;
+			}
+		}
+		if (ignore_object_index != NONE && hidden_count < 64)
+		{
+			struct object_datum *io = forge_valid_object_get(ignore_object_index);
+			if (io && !TEST_FLAG(io->object.flags, _object_invisible_bit))
+			{
+				SET_FLAG(io->object.flags, _object_invisible_bit, TRUE);
+				temp_hidden[hidden_count++] = ignore_object_index;
+			}
+		}
+		if (player_data)
+		{
+			long p_idx;
+			for (p_idx = data_next_index(player_data, NONE);
+				 p_idx != NONE && hidden_count < 64;
+				 p_idx = data_next_index(player_data, p_idx))
+			{
+				struct player_datum *pl = player_get(p_idx);
+				if (pl && pl->unit_index != NONE && forge_is_unit_in_monitor_mode(pl->unit_index))
+				{
+					struct object_datum *po = forge_valid_object_get(pl->unit_index);
+					if (po && !TEST_FLAG(po->object.flags, _object_invisible_bit))
+					{
+						SET_FLAG(po->object.flags, _object_invisible_bit, TRUE);
+						temp_hidden[hidden_count++] = pl->unit_index;
+					}
+				}
+			}
+		}
+	}
+
+	res = collision_test_vector(flags, point, vector, ignore_object_index, collision);
+
+	for (i = 0; i < hidden_count; i++)
+	{
+		struct object_datum *ho = forge_valid_object_get(temp_hidden[i]);
+		if (ho)
+			SET_FLAG(ho->object.flags, _object_invisible_bit, FALSE);
+	}
+
+	return res;
+}
+
 static void euler_to_forward_up(float yaw, float pitch, float roll, real_vector3d *forward, real_vector3d *up)
 {
 	float cy = (float)cos((double)yaw);
@@ -4243,7 +4310,7 @@ void forge_3d_update(float dt)
 			ray_vec.j = cam_fwd.j * 20.0f;
 			ray_vec.k = cam_fwd.k * 20.0f;
 			memset(&coll, 0, sizeof(coll));
-			if (collision_test_vector(cflags, &ray_orig, &ray_vec, local_unit, &coll))
+			if (forge_collision_test_vector(cflags, &ray_orig, &ray_vec, local_unit, &coll))
 			{
 				float dx = coll.point.x - g_forge.cam_x;
 				float dy = coll.point.y - g_forge.cam_y;
@@ -4853,7 +4920,7 @@ void forge_3d_update(float dt)
 
 			g_forge.hovered_live_index = -1;
 			memset(&coll, 0, sizeof(coll));
-			if (collision_test_vector(cflags, &ray_origin, &ray_vec, ignore_obj, &coll))
+			if (forge_collision_test_vector(cflags, &ray_origin, &ray_vec, ignore_obj, &coll))
 			{
 				g_forge.ray_hit_valid = 1;
 				g_forge.ray_hit_x = coll.point.x;
@@ -5315,7 +5382,7 @@ void forge_3d_update(float dt)
 				beam_vec.j = fwd.j * g_forge.grab_distance;
 				beam_vec.k = fwd.k * g_forge.grab_distance;
 				memset(&bcoll, 0, sizeof(bcoll));
-				if (collision_test_vector(
+				if (forge_collision_test_vector(
 					FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
 					&beam_orig, &beam_vec, ignore_grab, &bcoll))
 				{
@@ -5349,8 +5416,8 @@ void forge_3d_update(float dt)
 				down_vec.j = 0.0f;
 				down_vec.k = -200.0f;
 				memset(&gcoll, 0, sizeof(gcoll));
-				if (collision_test_vector(
-					FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
+				if (forge_collision_test_vector(
+					FLAG(_collision_test_structure_bit) | FLAG(_collision_test_objects_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
 					&down_orig, &down_vec, ignore_grab, &gcoll))
 				{
 					tz = gcoll.point.z + 0.08f;
@@ -5373,7 +5440,7 @@ void forge_3d_update(float dt)
 				surf_vec.j = fwd.j * 30.0f;
 				surf_vec.k = fwd.k * 30.0f;
 				memset(&scoll, 0, sizeof(scoll));
-				if (collision_test_vector(
+				if (forge_collision_test_vector(
 					FLAG(_collision_test_structure_bit) | FLAG(_collision_test_objects_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
 					&surf_orig, &surf_vec, ignore_grab, &scoll))
 				{

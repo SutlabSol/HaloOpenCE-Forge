@@ -44,6 +44,10 @@ A name another tag of its group has (any case) is numbered ("battle rifle
 #include <stdlib.h>
 #include <string.h>
 
+#undef malloc
+#undef free
+#undef realloc
+
 /* ---------- constants */
 
 enum

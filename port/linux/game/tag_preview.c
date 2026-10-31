@@ -102,8 +102,11 @@ void tag_preview_mesh_free(struct tag_injector_mesh *m)
 static void drop_mesh(void)
 {
 	if (preview_bitmap_ready)
-		texture_cache_bitmap_delete(&preview_bitmap);
-	preview_bitmap_ready = FALSE;
+	{
+		bitmap_delete(&preview_bitmap);
+		memset(&preview_bitmap, 0, sizeof(preview_bitmap));
+		preview_bitmap_ready = FALSE;
+	}
 	tag_preview_mesh_free(&mesh);
 	loaded_mode = -1;
 	loaded_cat = -1;
@@ -673,23 +676,26 @@ struct bitmap_data *tag_preview_picture(void)
 	if (mesh.vertex_count <= 0 || mesh.triangle_count <= 0)
 		return NULL;
 
-	if (preview_bitmap_ready)
-		texture_cache_bitmap_delete(&preview_bitmap);
-	memset(&preview_bitmap, 0, sizeof(preview_bitmap));
-	preview_bitmap.signature = BITMAP_DATA_SIGNATURE;
-	preview_bitmap.width = TAG_PREVIEW_WIDTH;
-	preview_bitmap.height = TAG_PREVIEW_HEIGHT;
-	preview_bitmap.depth = 1;
-	preview_bitmap.type = _bitmap_type_2d;
-	preview_bitmap.format = _bitmap_format_a8r8g8b8;
-	preview_bitmap.flags = FLAG(_bitmap_linear_bit);
-	preview_bitmap.mipmap_count = 0;
-	preview_bitmap.pixels_offset = 0;
-	preview_bitmap.base_address = preview_pixels;
-	preview_bitmap.hardware_format = NULL;
+	if (!preview_bitmap_ready)
+	{
+		memset(&preview_bitmap, 0, sizeof(preview_bitmap));
+		preview_bitmap.signature = BITMAP_DATA_SIGNATURE;
+		preview_bitmap.width = TAG_PREVIEW_WIDTH;
+		preview_bitmap.height = TAG_PREVIEW_HEIGHT;
+		preview_bitmap.depth = 1;
+		preview_bitmap.type = _bitmap_type_2d;
+		preview_bitmap.format = _bitmap_format_a8r8g8b8;
+		preview_bitmap.flags = FLAG(0); /* _bitmap_has_power_of_two_dimensions_bit */
+		preview_bitmap.mipmap_count = 0;
+		preview_bitmap.pixels_offset = 0;
+		preview_bitmap.pixels_size = sizeof(preview_pixels);
+		preview_bitmap.base_address = preview_pixels;
+		preview_bitmap.hardware_format = NULL;
+		preview_bitmap_ready = TRUE;
+	}
 
 	render_frame();
+	bitmap_rebuild(&preview_bitmap);
 	turn_Step++;
-	preview_bitmap_ready = TRUE;
-	return &preview_bitmap;
+	return preview_bitmap.hardware_format ? &preview_bitmap : NULL;
 }

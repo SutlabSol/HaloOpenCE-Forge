@@ -35,7 +35,7 @@ Rather than shipping as a separate standalone addon binary with stripped menus, 
   - **STANDARD:** Normal OpenCE Multiplayer (Internet Server Browser, LAN, Split-Screen, Create Game).
   - **FORGE:** Opens the dedicated Forge Hub (**Solo Forge**, **Multiplayer Forge**, **Edit Maps**, and **Tag Options**).
 - **Compressed `.ocetags` Cache (`OCEZ`) & 122 MB Map Support:** All extracted stock and custom tags are stored using `zlib` stream compression (`OCEZ`) with a deduplicated binary manifest (`manifest.bin`), minimizing disk footprint while supporting a **512 MB contiguous memory window** and **122 MB map/tag cache limit**.
-- **Cross-Compatible Custom Maps:** Maps forged and saved (`F5` or `Pause -> SAVE MAP..`) bake all placed objects, spawns, objectives, and injected tags into a standard Halo Custom Edition `.map` file in `custom_maps/` (with metadata in `OpenCE Forge/forge_maps/<name>/`), ready for automatic P2P map sharing.
+- **Standalone `.map` Tag Injection & Baking (`v2.1.0`):** Maps forged and saved (`F5` or `Pause -> SAVE MAP..`) inject and bake all placed objects, spawns, objectives, and imported custom/campaign tags (from Faber Tag Vault `.fbrtag` / `faber_vault.bin`, decompressed Xbox donor caches, `.fxtg` bundles, and `.ocetags` packages) directly into a standalone Halo Custom Edition `.map` file in `custom_maps/` so forged maps play natively in Standard Mode Multiplayer without external tag files.
 
 > [!IMPORTANT]
 > **No proprietary game maps or copyrighted assets are included in this repository or its releases.** You must provide your own Halo: Combat Evolved `maps/` (or Xbox `.iso` / `.xiso` disc image) and optional Halo Custom Edition `custom_maps/` (`bitmaps.map`, `sounds.map`, `loc.map`). On first launch, `halo.exe` builds your local compressed tag cache in `OpenCE Forge/cached_tags/` directly from your own maps.
@@ -51,10 +51,10 @@ Navigating to **`MULTIPLAYER -> FORGE`** opens the Forge Hub:
 3. **EDIT MAPS:** Browse **User Created** and **Downloaded** Forge maps with preview bitmaps and author metadata.
 4. **TAG OPTIONS:** Complete in-menu tag extraction and cache management suite:
    - **`ADD TAGS`:**
-     - Opens a Map Picker (`SINGLEPLAYER` / `MULTIPLAYER` / `CUSTOM SINGLEPLAYER` / `CUSTOM MULTIPLAYER`).
+     - Opens a Map Picker (`CUSTOM SINGLEPLAYER` / `CUSTOM MULTIPLAYER`) for browsing Custom Edition maps in `custom_maps/`.
      - Selecting any map opens the **Map Tag Browser** across 5 categories (`SCENERY`, `VEHICLES`, `DEVICES`, `WEAPONS`, `EQUIPMENT`).
-     - Features a **live rotating 3D model preview** on the right-hand panel along with `- <tag name>`, `- <tag type>`, and `- <tag size>`.
-     - Pressing **`CHOOSE`** prompts you to enter a custom Forge menu name (`[C] <your_name>`), then extracts the tag and its full dependency closure into compressed `.ocetags` storage and injects it into the Forge spawn menu.
+     - Features a **live rotating 128×128 3D model preview** on the right-hand panel along with `- <tag name>`, `- <tag type>`, and `- <tag size>`.
+     - Pressing **`CHOOSE`** prompts you to enter a custom Forge menu name (`[C] <your_name>`) in a dedicated input box, then extracts the tag and its full dependency closure into the Faber Tag Vault (`OpenCE Forge/tag_vault/`) and injects it into the Forge spawn menu.
    - **`INSTALLED TAGS`:**
      - Browse all tags currently installed in your cache across the same 5 categories (`SCENERY`, `VEHICLES`, `DEVICES`, `WEAPONS`, `EQUIPMENT`) with the live rotating 3D preview and size breakdown.
      - Choosing any tag opens a confirmation dialog allowing you to **delete** individual tags from the cache.
