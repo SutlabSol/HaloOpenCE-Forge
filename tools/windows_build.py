@@ -47,6 +47,19 @@ FORGE_OBJCOPY_REDEFINES: Dict[str, List[str]] = {
         "--redefine-sym", "_ui_widget_port_multiplayer_maps=_forge_menu_multiplayer_maps",
         "--redefine-sym", "_ui_widget_port_multiplayer_map_choose=_forge_menu_multiplayer_map_choose",
         "--redefine-sym", "_player_profile_get=_forge_player_profile_get",
+        "--redefine-sym", "_p2p_join_listing=_forge_p2p_join_listing",
+    ],
+    "port/linux/src/p2p_lobby.c": [
+        "--redefine-sym", "_p2p_lobby_games=_orig_p2p_lobby_games",
+    ],
+    "port/linux/game/game_modes.c": [
+        "--redefine-sym", "_game_modes_kind=_orig_game_modes_kind",
+        "--redefine-sym", "_game_modes_kind_name=_orig_game_modes_kind_name",
+        "--redefine-sym", "_game_modes_variant_kind_name=_orig_game_modes_variant_kind_name",
+    ],
+    "source/networking/network_client_manager.c": [
+        "--redefine-sym", "_network_game_client_advertised_game_compatible=_orig_network_game_client_advertised_game_compatible",
+        "--redefine-sym", "_network_game_client_advertised_game_kind=_orig_network_game_client_advertised_game_kind",
     ],
     "port/linux/game/network_chat.c": [
         "--redefine-sym", "_network_chat_update=_orig_network_chat_update",
@@ -70,6 +83,11 @@ FORGE_OBJCOPY_REDEFINES: Dict[str, List[str]] = {
     ],
     "source/interface/hud_weapon.c": [
         "--redefine-sym", "_hud_render_weapon_interface=_orig_hud_render_weapon_interface",
+    ],
+    "source/interface/hud_draw.c": [
+        "--redefine-sym", "_hud_draw_bitmap_direct=_orig_hud_draw_bitmap_direct",
+        "--redefine-sym", "_hud_draw_numbers=_orig_hud_draw_numbers",
+        "--redefine-sym", "_real_argb_color_to_pixel32=_hud_draw_real_argb_color_to_pixel32",
     ],
     "source/hs/hs.c": [
         "--redefine-sym", "_hs_compile_and_evaluate=_orig_hs_compile_and_evaluate",

@@ -95,6 +95,7 @@ def get_cflags_sets() -> tuple[list[str], list[str]]:
         *extra_game,
         f"-I{XDK_INCLUDE}",
         f"-I{SDL_DIR / 'include'}",
+        f"-I{ZLIB_DIR}",
     ]
 
     platform_cflags = [
@@ -2095,6 +2096,17 @@ def build_haloce_forge_exe() -> Path:
     ], check=True)
     net_replacements["source/interface/hud_weapon.o"] = hud_weapon_wrapped
 
+    hud_draw_wrapped = wrap_dir / "hud_draw.o"
+    shutil.copyfile(obj_root / "source/interface/hud_draw.o", hud_draw_wrapped)
+    subprocess.run([
+        objcopy,
+        "--redefine-sym", "_hud_draw_bitmap_direct=_orig_hud_draw_bitmap_direct",
+        "--redefine-sym", "_hud_draw_numbers=_orig_hud_draw_numbers",
+        "--redefine-sym", "_real_argb_color_to_pixel32=_hud_draw_real_argb_color_to_pixel32",
+        str(hud_draw_wrapped),
+    ], check=True)
+    net_replacements["source/interface/hud_draw.o"] = hud_draw_wrapped
+
     models_wrapped = wrap_dir / "models.o"
     shutil.copyfile(obj_root / "source/models/models.o", models_wrapped)
     subprocess.run([
@@ -2271,9 +2283,10 @@ def build_haloce_forge_exe() -> Path:
 
 
 if __name__ == "__main__":
-    ac_exe = build_asset_compiler()
-    if "--run-step4" in sys.argv:
-        res = subprocess.run([str(ac_exe), "--step4"], cwd=str(ROOT_DIR))
-        if res.returncode != 0:
-            sys.exit(res.returncode)
+    if "--asset-compiler" in sys.argv or "--run-step4" in sys.argv:
+        ac_exe = build_asset_compiler()
+        if "--run-step4" in sys.argv:
+            res = subprocess.run([str(ac_exe), "--step4"], cwd=str(ROOT_DIR))
+            if res.returncode != 0:
+                sys.exit(res.returncode)
     build_haloce_forge_exe()

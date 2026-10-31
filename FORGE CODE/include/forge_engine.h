@@ -16,12 +16,13 @@ extern "C" {
 
 /* ---------- Forge Release Version & Network Protocol Isolation (v1.1.1, 0x4628) */
 
-#define FORGE_VERSION_STRING "2.1.2"
+#define FORGE_VERSION_STRING "2.2.4"
 #define FORGE_NETWORK_VERSION 0x4628
+#define FORGE_GAME_KIND 0x46
+#define HALO_PORT_NETWORK_VERSION_STOCK 25
 /* Standard (non-Forge) sessions use OpenCE's own HALO_PORT_NETWORK_VERSION
  * (port/linux/include/halo_port_limits.h), read in forge_get_network_version(),
  * so an upstream protocol bump never leaves Forge unable to join stock games. */
-#define _forge_ai_team_friendly_human _forge_ai_team_friendly
 
 extern int g_forge_session_enabled;
 long forge_get_network_version(void);
@@ -119,14 +120,13 @@ struct forge_catalog_entry
 {
 	uint32_t group_tag;
 	uint8_t category;
-	uint8_t source_cache_id; /* 0 = forgeasset.map (universal), 1 = customforgeasset.map (SP only) */
+	uint8_t source_cache_id; /* 0 = xbox_catalog, 1 = customforgeasset, 2 = custom cached [C], 3 = map-local [MAP] */
 	uint16_t pad;
 	char tag_path[FORGE_TAG_PATH_MAX];
 	char display_name[64];
 };
 
 #define FORGE_MAX_CATALOG_ENTRIES 2048
-#define FORGE_MAX_DONOR_MAPS_LIST 128
 
 /* ---------- Live Placed Instance Tracking */
 
@@ -166,7 +166,6 @@ struct forge_runtime_state
 	int palette_scroll;
 	int props_cursor;
 	enum forge_snap_angle_mode snap_mode;
-	int ai_team_mode; /* _forge_ai_team_friendly_human or _forge_ai_team_enemy_covenant */
 	int third_person_view; /* Toggleable via console `third_person` or F4 to inspect 343 Guilty Spark */
 
 	/* Monitor 6DOF Free-Cam State */
@@ -198,11 +197,6 @@ struct forge_runtime_state
 	/* Catalogs from cached_tags / forgeasset.map (0) and customforgeasset.map (1) */
 	struct forge_catalog_entry catalog[FORGE_MAX_CATALOG_ENTRIES];
 	int catalog_count;
-
-	/* Donor maps list for "Inject Custom Tags" modal */
-	char donor_map_files[FORGE_MAX_DONOR_MAPS_LIST][256];
-	int donor_map_count;
-	int donor_map_cursor;
 
 	/* Save Map state: prompts for name on initial save, then quick-updates on subsequent saves */
 	int has_saved_map_once;
@@ -295,9 +289,7 @@ void forge_runtime_reload_catalogs(void);
 int forge_is_multiplayer_session(void);
 int forge_catalog_entry_allowed(struct forge_catalog_entry const *entry);
 long forge_resolve_engine_tag(uint32_t group_tag, char const *tag_path, uint32_t *out_actual_group);
-int forge_ui_inject_custom_map(char const *donor_map_path);
 int forge_clear_custom_tag_cache(void);
-int forge_reset_all_tag_caches_and_restart(void);
 int forge_reset_stock_tag_cache(void);
 int forge_ui_open_map_for_tag_browser(char const *map_path);
 void forge_ui_close_map_tag_browser(void);
@@ -324,7 +316,6 @@ int32_t forge_ai_spawn_unit_live(
 	float x, float y, float z, float yaw,
 	int16_t team_designator,
 	int32_t *out_unit_index);
-void forge_ai_clear_all_live(void);
 
 /* ---------- Prototypes: forge_3d_mode.c */
 
@@ -380,6 +371,11 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 void forge_network_pre_handle_object_changes(void const *entries, short count);
 void forge_network_post_handle_object_changes(void const *entries, short count);
 void forge_runtime_on_map_unload(void);
+int forge_is_tag_map_local_only(uint32_t group_tag, char const *tag_path);
+int forge_cache_active_map_tag(uint32_t group_tag, char const *tag_path);
+void forge_menu_custom_edition_maps_look_again(void);
+void forge_normalize_mcc_hud_tags(void);
+int forge_is_mcc_hud_active(void);
 int forge_window_is_focused(void);
 short forge_key_state(int vk);
 

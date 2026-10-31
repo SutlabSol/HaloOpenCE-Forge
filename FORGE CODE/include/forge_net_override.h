@@ -22,6 +22,9 @@ extern long forge_get_network_version(void);
 #endif
 
 #undef HALO_PORT_NETWORK_VERSION
+#define HALO_PORT_NETWORK_VERSION_STOCK 25
+#define FORGE_NETWORK_VERSION 0x4628
+#define FORGE_GAME_KIND 0x46
 #define HALO_PORT_NETWORK_VERSION (forge_get_network_version())
 
 #endif /* FORGE_NET_OVERRIDE_H */

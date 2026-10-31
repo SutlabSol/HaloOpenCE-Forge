@@ -425,6 +425,19 @@ static int listing_read(const unsigned char *bytes, int size, struct listing *li
 	if (offset + P2P_SIGNATURE_SIZE != size)
 		return 0;
 	listing->signed_size = offset;
+#ifdef FORGE_NET_OVERRIDE_H
+	if (listing->version == FORGE_NETWORK_VERSION ||
+		listing->kind == FORGE_GAME_KIND ||
+		(listing->gametype[0] && _stricmp(listing->gametype, "Forge") == 0))
+	{
+		listing->kind = FORGE_GAME_KIND;
+	}
+	if (listing->version == FORGE_NETWORK_VERSION ||
+		listing->version == HALO_PORT_NETWORK_VERSION_STOCK)
+	{
+		listing->version = (int)HALO_PORT_NETWORK_VERSION;
+	}
+#endif
 	return 1;
 }
 

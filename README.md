@@ -100,18 +100,22 @@ All Forge keyboard/mouse and controller bindings can be customized in-game under
 
 | Key / Input | Controller Default | Action |
 | :--- | :--- | :--- |
-| **`F1`** | **DPAD UP** | Toggle between Spartan & 3D Monitor Forge Mode |
-| **`F2`** | **Y** | Open / Close Forge Object Palette *(Monitor Mode)* |
-| **`F3`** | **BACK** | Toggle 1st-Person / 3rd-Person View |
-| **`F5`** | **START** | Quick Save Forge Map (`custom_maps/` & `OpenCE Forge/forge_maps/`) |
-| **`Left Click`** | **A** | Grab / Place object within 20m |
-| **`Mouse Wheel`** | **LT / RT** *(with object)* | Push / Pull held object (1m – 30m) |
-| **`Hold R` + Mouse** | **RB + Right Stick** | Rotate held object (`Q` / `E` cycles Yaw, Pitch, Roll) |
-| **`G`** | **DPAD RIGHT** | Cycle Rotation Snap (`Off`, `5°`, `15°`, `45°`, `90°`) |
-| **`Hold Z`** | **LB** | Live-snap held object to floor |
-| **`Hold F`** | **LEFT THUMB** | Align held object to surface normal |
-| **`X`** | **X** | Open Object Properties (Team, Spawn Time, Channel, Gametype) |
-| **`Delete` / `Backspace`** | **B** | Delete highlighted or held object / spawn / objective |
+| **`F1`** | **D-Pad Up** | Switch Play / Edit (3D Monitor) Mode |
+| **`F2`** | **X** | Open / Close Inventory (Forge Object Palette) |
+| **`X`** | **X** *(while holding item)* | Open Item Options (Team, Gametype, Snap, Save to Cache) |
+| **`Left Click`** | **A** | Grab / Drop Item |
+| **`Esc`** *(while holding item)* | **Hold B** | Cancel Grab / Drop Held Item |
+| **`Delete` / `Backspace`** | **Y** | Delete Selected / Held Item |
+| **`W` / `A` / `S` / `D`** | **Left Stick** | Move Monitor / Rotate Selected Item *(Pitch & Yaw with RT)* |
+| **`Mouse Look`** | **Right Stick** | Look / Rotate Selected Item *(Roll with RT)* |
+| **`Hold R` + Mouse** | **Hold Right Trigger (RT)** | Rotate Selected Item (`Q` / `E` cycles Yaw, Pitch, Roll on KB/M) |
+| **`Space` / `Shift`** | **Right Bumper (RB) / Left Bumper (LB)** | Move Monitor Up / Move Monitor Down |
+| **`C`** | **D-Pad Right** | Copy / Duplicate Hovered Object |
+| **`F3`** | **Back** | Toggle 1st-Person / 3rd-Person View |
+| **`F5`** | **D-Pad Down** | Quick Save Forge Map (`custom_maps/` & `OpenCE Forge/forge_maps/`) |
+| **`G`** | **Left Thumb (LS)** | Cycle Rotation Snap (`Off`, `5°`, `15°`, `45°`, `90°`) |
+| **`Hold Z`** | **D-Pad Left** | Live-snap held object to floor |
+| **`Hold F`** | **Right Thumb (RS)** | Align held object to surface normal |
 
 ---
 

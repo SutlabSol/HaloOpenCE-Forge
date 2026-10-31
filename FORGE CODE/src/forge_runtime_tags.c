@@ -33,6 +33,8 @@
 #include "sound/sound_definitions.h"
 #include "tag_files/tag_groups.h"
 #include "tag_files/tag_files.h"
+#include "scenario/scenario.h"
+#include "scenario/scenario_definitions.h"
 #include "cache/cache_files.h"
 #include "custom_edition_cache.h"
 #include "tag_schema.h"
@@ -727,7 +729,7 @@ int forge_catalog_entry_allowed(struct forge_catalog_entry const *entry)
 {
 	if (!entry)
 		return 0;
-	if (entry->source_cache_id == 2)
+	if (entry->source_cache_id == 2 || entry->source_cache_id == 3)
 		return 1;
 	/* Disable default stock bipeds, AI characters, and control devices */
 	if (entry->category == _forge_cat_bipeds ||
@@ -821,12 +823,42 @@ static void make_short_display_name(char const *tag_path, char const *prefix, ch
 	}
 	if (prefix && (_stricmp(prefix, "[c]") == 0))
 		snprintf(out, out_sz, "[C] %s", leaf);
+	else if (prefix && (_stricmp(prefix, "[map]") == 0))
+		snprintf(out, out_sz, "[MAP] %s", leaf);
 	else if (prefix && prefix[0] == '[')
 		snprintf(out, out_sz, "%s", prefix);
 	else if (prefix && prefix[0])
 		snprintf(out, out_sz, "%s %s", prefix, leaf);
 	else
 		snprintf(out, out_sz, "%s", leaf);
+}
+
+static int is_equivalent_stock_vehicle_path(char const *a, char const *b)
+{
+	static struct { char const *x; char const *y; } const pairs[] = {
+		{ "vehicles\\warthog\\warthog", "vehicles\\warthog\\mp_warthog" },
+		{ "vehicles\\ghost\\ghost", "vehicles\\ghost\\ghost_mp" },
+		{ "vehicles\\scorpion\\scorpion", "vehicles\\scorpion\\scorpion_mp" },
+		{ "vehicles\\banshee\\banshee", "vehicles\\banshee\\banshee_mp" },
+		{ "vehicles\\c_gun_turret\\c_gun_turret", "vehicles\\c_gun_turret\\c_gun_turret_mp" },
+		{ "vehicles\\c gun turret\\c gun turret", "vehicles\\c gun turret\\c gun turret_mp" },
+		{ "vehicles\\c_gun_turret\\c_gun_turret", "vehicles\\c gun turret\\c gun turret_mp" },
+		{ "vehicles\\c gun turret\\c gun turret", "vehicles\\c_gun_turret\\c_gun_turret_mp" },
+		{ "vehicles\\c_gun_turret\\c_gun_turret", "vehicles\\c gun turret\\c gun turret" },
+		{ "vehicles\\c_gun_turret\\c_gun_turret_mp", "vehicles\\c gun turret\\c gun turret_mp" }
+	};
+	size_t k;
+	if (!a || !b)
+		return 0;
+	for (k = 0; k < sizeof(pairs) / sizeof(pairs[0]); k++)
+	{
+		if ((_stricmp(a, pairs[k].x) == 0 && _stricmp(b, pairs[k].y) == 0) ||
+			(_stricmp(a, pairs[k].y) == 0 && _stricmp(b, pairs[k].x) == 0))
+		{
+			return 1;
+		}
+	}
+	return 0;
 }
 
 static void add_catalog_entry(
@@ -845,12 +877,21 @@ static void add_catalog_entry(
 	for (i = 0; i < g_forge.catalog_count; i++)
 	{
 		if (g_forge.catalog[i].group_tag == group_tag &&
-		    g_forge.catalog[i].category == category &&
-		    _stricmp(g_forge.catalog[i].tag_path, tag_path) == 0)
+		    (_stricmp(g_forge.catalog[i].tag_path, tag_path) == 0 ||
+		     (group_tag == 'vehi' && source_cache_id == 3 &&
+		      is_equivalent_stock_vehicle_path(g_forge.catalog[i].tag_path, tag_path))))
 		{
 			if (source_cache_id == 2)
 			{
 				g_forge.catalog[i].source_cache_id = 2;
+				g_forge.catalog[i].category = category;
+				make_short_display_name(tag_path, display_prefix, g_forge.catalog[i].display_name, sizeof(g_forge.catalog[i].display_name));
+			}
+			else if (source_cache_id == 3 && g_forge.catalog[i].source_cache_id == 0 &&
+			         !forge_catalog_entry_allowed(&g_forge.catalog[i]))
+			{
+				g_forge.catalog[i].source_cache_id = 3;
+				g_forge.catalog[i].category = category;
 				make_short_display_name(tag_path, display_prefix, g_forge.catalog[i].display_name, sizeof(g_forge.catalog[i].display_name));
 			}
 			return;
@@ -971,82 +1012,7 @@ static void scan_cached_tags_manifest(char const *manifest_path)
 	fclose(f);
 }
 
-static void scan_donor_maps_directory(char const *dir_path)
-{
-	char pattern[512];
-	WIN32_FIND_DATAA fd;
-	HANDLE h;
-
-	snprintf(pattern, sizeof(pattern), "%s\\*.map", dir_path);
-	h = FindFirstFileA(pattern, &fd);
-	if (h == INVALID_HANDLE_VALUE)
-		return;
-	do
-	{
-		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-			continue;
-		if (_stricmp(fd.cFileName, "bitmaps.map") == 0 ||
-			_stricmp(fd.cFileName, "sounds.map") == 0 ||
-			_stricmp(fd.cFileName, "loc.map") == 0 ||
-			_stricmp(fd.cFileName, "forgeasset.map") == 0 ||
-			_stricmp(fd.cFileName, "customforgeasset.map") == 0)
-		{
-			continue;
-		}
-		if (g_forge.donor_map_count < FORGE_MAX_DONOR_MAPS_LIST)
-		{
-			snprintf(
-				g_forge.donor_map_files[g_forge.donor_map_count++],
-				sizeof(g_forge.donor_map_files[0]),
-				"%s/%s",
-				dir_path,
-				fd.cFileName);
-		}
-	} while (FindNextFileA(h, &fd));
-	CloseHandle(h);
-}
-
 static int forge_scan_and_rip_ocetags_folders(int force_reextract);
-
-static void scan_ocetags_directory_into_donor_list(char const *dir_path)
-{
-	char pattern[512];
-	WIN32_FIND_DATAA fd;
-	HANDLE h;
-
-	snprintf(pattern, sizeof(pattern), "%s\\*.ocetags", dir_path);
-	h = FindFirstFileA(pattern, &fd);
-	if (h == INVALID_HANDLE_VALUE)
-		return;
-	do
-	{
-		char cand[256];
-		int i, dup = 0;
-		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-			continue;
-		snprintf(cand, sizeof(cand), "%s/%s", dir_path, fd.cFileName);
-		for (i = 0; i < g_forge.donor_map_count; i++)
-		{
-			char const *s1 = strrchr(g_forge.donor_map_files[i], '/');
-			char const *s2 = strrchr(g_forge.donor_map_files[i], '\\');
-			char const *leaf = s1 > s2 ? s1 + 1 : (s2 ? s2 + 1 : g_forge.donor_map_files[i]);
-			if (_stricmp(leaf, fd.cFileName) == 0)
-			{
-				dup = 1;
-				break;
-			}
-		}
-		if (!dup && g_forge.donor_map_count < FORGE_MAX_DONOR_MAPS_LIST)
-		{
-			snprintf(
-				g_forge.donor_map_files[g_forge.donor_map_count++],
-				sizeof(g_forge.donor_map_files[0]),
-				"%s",
-				cand);
-		}
-	} while (FindNextFileA(h, &fd));
-	CloseHandle(h);
-}
 
 static void scan_faber_tag_vault_into_catalog(void)
 {
@@ -1108,6 +1074,137 @@ static void scan_faber_tag_vault_into_catalog(void)
 	}
 }
 
+static int is_excluded_map_local_helper_tag(char const *tag_path)
+{
+	static char const *const s_helpers[] = {
+		"nomodel",
+		"hologram",
+		"holo control",
+		"doorblinker",
+		"nutblocker",
+		"door_blast_collision",
+		"countdown timer",
+		"temp critical",
+		"teleporter_shield",
+		"floor_arrow",
+		"cutscene_",
+		"lifepod_atmosphere_entry",
+		"\\devices\\"
+	};
+	char lower_buf[260];
+	size_t i, k;
+
+	if (!tag_path || !tag_path[0])
+		return 1;
+	if (_strnicmp(tag_path, "cinematics\\", 11) == 0 ||
+		_strnicmp(tag_path, "ui\\", 3) == 0 ||
+		_strnicmp(tag_path, "sound\\", 6) == 0 ||
+		_strnicmp(tag_path, "rasterizer\\", 11) == 0 ||
+		_strnicmp(tag_path, "fx\\", 3) == 0)
+	{
+		return 1;
+	}
+	for (i = 0; tag_path[i] && i + 1 < sizeof(lower_buf); i++)
+	{
+		char ch = tag_path[i];
+		if (ch >= 'A' && ch <= 'Z')
+			ch = (char)(ch - 'A' + 'a');
+		lower_buf[i] = ch;
+	}
+	lower_buf[i] = '\0';
+
+	for (k = 0; k < sizeof(s_helpers) / sizeof(s_helpers[0]); k++)
+	{
+		if (strstr(lower_buf, s_helpers[k]) != NULL)
+			return 1;
+	}
+	return 0;
+}
+
+static void scan_loaded_map_into_catalog(void)
+{
+	char const *cur_map = main_get_map_name();
+	struct scenario *scen;
+	long tag_count = 0;
+	struct forge_cache_file_tag_instance *instances;
+	long i;
+
+	if (!cur_map || !cur_map[0] ||
+		_stricmp(cur_map, "levels\\ui\\ui") == 0 ||
+		_stricmp(cur_map, "ui") == 0)
+	{
+		return;
+	}
+	scen = global_scenario_get();
+	if (!scen || scen->type == 2 /* _scenario_type_main_menu */)
+		return;
+
+	instances = (struct forge_cache_file_tag_instance *)cache_files_tag_instances(&tag_count);
+	if (!instances || tag_count <= 0)
+		return;
+
+	for (i = 0; i < tag_count; i++)
+	{
+		struct forge_cache_file_tag_instance const *inst = &instances[i];
+		uint32_t grp;
+		char const *tpath;
+		uint8_t cat_id;
+		struct _object_definition const *odef;
+
+		if (inst->tag_index == NONE || !inst->name || !inst->name[0] || !inst->base_address)
+			continue;
+		grp = (uint32_t)inst->group_tag;
+		tpath = inst->name;
+
+		if (grp != 'scen' && grp != 'vehi' && grp != 'weap' &&
+			grp != 'eqip' && grp != 'mach' && grp != 'lifi')
+		{
+			continue;
+		}
+		if (is_excluded_map_local_helper_tag(tpath))
+			continue;
+
+		/* Skip built-in vehicle turret weapons and non-placeable pseudo-weapons */
+		if (grp == 'weap' &&
+			(_strnicmp(tpath, "vehicles\\", 9) == 0 ||
+			 _strnicmp(tpath, "characters\\", 11) == 0 ||
+			 is_excluded_weapon_or_equipment_tag(tpath)))
+		{
+			continue;
+		}
+		if (grp == 'eqip' && is_excluded_weapon_or_equipment_tag(tpath))
+			continue;
+
+		/* Require a valid 3D model on object definitions (or light/emitter classification)
+		 * so invisible script-anchor scenery or sound-only dummy objects do not clutter the palette. */
+		odef = (struct _object_definition const *)inst->base_address;
+		if (grp != 'lifi' && odef->model.index == NONE)
+		{
+			if (!is_forge_light_beacon_emitter_tag(grp, tpath) || odef->attachments.count <= 0)
+				continue;
+		}
+
+		if (grp == 'weap')
+			cat_id = _forge_cat_weapons;
+		else if (grp == 'eqip')
+			cat_id = _forge_cat_equipment;
+		else if (grp == 'vehi')
+			cat_id = _forge_cat_vehicles;
+		else if (grp == 'lifi')
+			cat_id = _forge_cat_lights;
+		else if (grp == 'mach')
+			cat_id = is_forge_light_beacon_emitter_tag(grp, tpath) ? _forge_cat_lights : _forge_cat_barriers_devices;
+		else if (is_forge_door_tag(grp, tpath))
+			cat_id = _forge_cat_barriers_devices;
+		else if (is_forge_light_beacon_emitter_tag(grp, tpath))
+			cat_id = _forge_cat_lights;
+		else
+			cat_id = _forge_cat_scenery;
+
+		add_catalog_entry(grp, cat_id, 3, tpath, "[map]");
+	}
+}
+
 void forge_runtime_reload_catalogs(void)
 {
 	g_forge.catalog_count = 0;
@@ -1129,13 +1226,15 @@ void forge_runtime_reload_catalogs(void)
 	/* 1. Scan custom .ocetags packages in OpenCE Forge/custom_tags/ (if not yet indexed) */
 	forge_scan_and_rip_ocetags_folders(0);
 
-	/* 2. Load Custom .ocetags catalog first (so [c] items appear at the top of each category), then Xbox default catalog */
-	(void)scan_donor_maps_directory;
+	/* 2. Load Custom .ocetags catalog first (so [C] items appear at the top of each category),
+	 *    then Xbox default catalog, then any map-local tags ([MAP]) from the currently loaded map */
 	scan_faber_tag_vault_into_catalog();
 	scan_cached_tags_manifest("OpenCE Forge/cached_tags/custom_catalog.txt");
 	scan_cached_tags_manifest("OpenCE Forge/cached_tags/xbox_catalog.txt");
+	scan_loaded_map_into_catalog();
 
-	/* 3. Stable-sort custom .ocetags entries (source_cache_id == 2) to the front of g_forge.catalog */
+	/* 3. Stable-sort custom cached entries ([C], source_cache_id == 2) first,
+	 *    then map-local entries ([MAP], source_cache_id == 3), then donor/stock entries */
 	if (g_forge.catalog_count > 10)
 	{
 		struct forge_catalog_entry *sorted =
@@ -1150,27 +1249,27 @@ void forge_runtime_reload_catalogs(void)
 			}
 			for (i = 0; i < g_forge.catalog_count; i++)
 			{
+				if (g_forge.catalog[i].source_cache_id == 3)
+					sorted[out_n++] = g_forge.catalog[i];
+			}
+			for (i = 0; i < g_forge.catalog_count; i++)
+			{
 				if (g_forge.catalog[i].source_cache_id == 1)
 					sorted[out_n++] = g_forge.catalog[i];
 			}
 			for (i = 0; i < g_forge.catalog_count; i++)
 			{
-				if (g_forge.catalog[i].source_cache_id != 2 && g_forge.catalog[i].source_cache_id != 1)
+				if (g_forge.catalog[i].source_cache_id != 2 &&
+					g_forge.catalog[i].source_cache_id != 3 &&
+					g_forge.catalog[i].source_cache_id != 1)
+				{
 					sorted[out_n++] = g_forge.catalog[i];
+				}
 			}
 			memcpy(g_forge.catalog, sorted, (size_t)out_n * sizeof(struct forge_catalog_entry));
 			free(sorted);
 		}
 	}
-
-	/* Refresh custom_tags .ocetags list */
-	g_forge.donor_map_count = 0;
-	snprintf(
-		g_forge.donor_map_files[g_forge.donor_map_count++],
-		sizeof(g_forge.donor_map_files[0]),
-		"__OCETAGS_FOLDER__");
-	scan_ocetags_directory_into_donor_list("OpenCE Forge/custom_tags");
-	scan_ocetags_directory_into_donor_list("custom_tags");
 }
 
 #ifdef _WIN32
@@ -1793,139 +1892,8 @@ int forge_clear_custom_tag_cache(void)
 	return 1;
 }
 
-#ifdef _WIN32
-struct forge_startupinfo_a
-{
-	uint32_t cb;
-	char *lpReserved;
-	char *lpDesktop;
-	char *lpTitle;
-	uint32_t dwX;
-	uint32_t dwY;
-	uint32_t dwXSize;
-	uint32_t dwYSize;
-	uint32_t dwXCountChars;
-	uint32_t dwYCountChars;
-	uint32_t dwFillAttribute;
-	uint32_t dwFlags;
-	uint16_t wShowWindow;
-	uint16_t cbReserved2;
-	uint8_t *lpReserved2;
-	void *hStdInput;
-	void *hStdOutput;
-	void *hStdError;
-};
-
-struct forge_process_information
-{
-	void *hProcess;
-	void *hThread;
-	uint32_t dwProcessId;
-	uint32_t dwThreadId;
-};
-
-extern uint32_t __stdcall GetModuleFileNameA(void *hModule, char *lpFilename, uint32_t nSize);
-extern int __stdcall CreateProcessA(
-	char const *lpApplicationName,
-	char *lpCommandLine,
-	void *lpProcessAttributes,
-	void *lpThreadAttributes,
-	int bInheritHandles,
-	uint32_t dwCreationFlags,
-	void *lpEnvironment,
-	char const *lpCurrentDirectory,
-	struct forge_startupinfo_a *lpStartupInfo,
-	struct forge_process_information *lpProcessInformation);
-extern void __stdcall ExitProcess(uint32_t uExitCode);
-#endif
-
-int forge_reset_all_tag_caches_and_restart(void)
-{
-#ifdef _WIN32
-	FILE *flag_fp;
-	char exe_path[512];
-	char cmd_line[1024];
-	struct forge_startupinfo_a si;
-	struct forge_process_information pi;
-	int slot;
-
-	/* Clear all Xbox and custom tag catalogs & decompressed Xbox map cache */
-	remove("OpenCE Forge/cached_tags/xbox_catalog.txt");
-	remove("OpenCE Forge/cached_tags/catalog.txt");
-	remove("OpenCE Forge/cached_tags/custom_catalog.txt");
-	forge_delete_files_matching("OpenCE Forge/cached_tags/xbox_cache", "*.map");
-	forge_delete_files_matching("OpenCE Forge/cached_tags", "c_*.*");
-
-	/* Also clear OpenCE's 6-slot z:\cache000.map..z:\cache005.map ring buffer and z:\cache_donor.map */
-	for (slot = 0; slot <= 6; slot++)
-	{
-		char z_xbox[64];
-		char z_path[512];
-		if (slot < 6)
-			snprintf(z_xbox, sizeof(z_xbox), "z:\\cache00%d.map", slot);
-		else
-			snprintf(z_xbox, sizeof(z_xbox), "z:\\cache_donor.map");
-		platform_translate_path(z_xbox, z_path, sizeof(z_path));
-		remove(z_path);
-	}
-
-	CreateDirectoryA("OpenCE Forge", NULL);
-	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
-	flag_fp = fopen("OpenCE Forge/cached_tags/ask_rebuild_on_launch.flag", "wb");
-	if (flag_fp)
-	{
-		fprintf(flag_fp, "1\n");
-		fclose(flag_fp);
-	}
-
-	memset(exe_path, 0, sizeof(exe_path));
-	if (GetModuleFileNameA(NULL, exe_path, (uint32_t)(sizeof(exe_path) - 1)) == 0 || !exe_path[0])
-		snprintf(exe_path, sizeof(exe_path), "halo.exe");
-
-	snprintf(cmd_line, sizeof(cmd_line),
-		"cmd.exe /c \"ping 127.0.0.1 -n 2 >nul & start \"\" \"%s\"\"",
-		exe_path);
-
-	memset(&si, 0, sizeof(si));
-	si.cb = (uint32_t)sizeof(si);
-	memset(&pi, 0, sizeof(pi));
-	if (CreateProcessA(
-			NULL,
-			cmd_line,
-			NULL,
-			NULL,
-			0,
-			0x08000000u /* CREATE_NO_WINDOW */,
-			NULL,
-			NULL,
-			&si,
-			&pi))
-	{
-		/* Do not call CloseHandle here: halo_windows_prefix.h maps CloseHandle
-		 * to halo_xbox_CloseHandle, which expects an Xbox HANDLE, whereas
-		 * ExitProcess(0) immediately closes all Win32 process/thread handles. */
-	}
-	ExitProcess(0);
-	return 1;
-#else
-	return 0;
-#endif
-}
-
 static void forge_ensure_local_tag_cache_built(void)
 {
-	int ask_before_build = 0;
-	{
-		FILE *flag_f = fopen("OpenCE Forge/cached_tags/ask_rebuild_on_launch.flag", "rb");
-		if (flag_f)
-		{
-			fclose(flag_f);
-			remove("OpenCE Forge/cached_tags/ask_rebuild_on_launch.flag");
-			ask_before_build = 1;
-		}
-	}
-
-	if (!ask_before_build)
 	{
 		FILE *f = fopen("OpenCE Forge/cached_tags/xbox_catalog.txt", "r");
 		if (f)
@@ -1950,19 +1918,6 @@ static void forge_ensure_local_tag_cache_built(void)
 	CreateDirectoryA("OpenCE Forge", NULL);
 	CreateDirectoryA("OpenCE Forge/custom_tags", NULL);
 	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
-
-	if (ask_before_build)
-	{
-		int resp = MessageBoxA(
-			NULL,
-			"OpenCE : Forge - Tag Cache Reset\n\n"
-			"The Xbox tag cache has been cleared.\n\n"
-			"Would you like to build the default Xbox map tag cache now?",
-			"OpenCE : Forge - Build Xbox Tag Cache",
-			0x00000004u | 0x00000040u /* MB_YESNO | MB_ICONINFORMATION */);
-		if (resp != 6 /* IDYES */)
-			return;
-	}
 
 	{
 		int extracted_total = forge_rip_maps_folder_to_cached_tags("maps");
@@ -2006,7 +1961,6 @@ void forge_runtime_init(void)
 	g_forge.active_modal = _forge_modal_none;
 	g_forge.current_category = _forge_cat_vehicles;
 	g_forge.snap_mode = _forge_snap_15_deg;
-	g_forge.ai_team_mode = _forge_ai_team_enemy_covenant;
 	g_forge.cam_speed = 12.0f;
 	g_forge.grabbed_object_index = NONE;
 	g_forge.grabbed_live_index = -1;
@@ -2126,7 +2080,6 @@ boolean mod_sounds_read(
 	return orig_mod_sounds_read(permutation, buffer);
 }
 
-static int s_marker_meshes_loaded_flag = 0;
 static long s_monitor_bipd_handle = NONE;
 static int s_monitor_resolved = 0;
 static int s_local_monitor_drawn_this_frame = 0;
@@ -2168,7 +2121,6 @@ void forge_runtime_on_map_unload(void)
 	}
 	s_forge_phys_allocs.count = 0;
 	s_dyn_sound_perms.count = 0;
-	s_marker_meshes_loaded_flag = 0;
 	s_monitor_bipd_handle = NONE;
 	s_monitor_resolved = 0;
 	s_local_monitor_drawn_this_frame = 0;
@@ -2191,6 +2143,16 @@ void forge_runtime_on_map_unload(void)
 		char donor_cache[512];
 		platform_translate_path("z:\\cache_donor.map", donor_cache, sizeof(donor_cache));
 		remove(donor_cache);
+	}
+	if (g_forge.initialized && g_forge.catalog_count > 0)
+	{
+		int out_c = 0;
+		for (i = 0; i < g_forge.catalog_count; i++)
+		{
+			if (g_forge.catalog[i].source_cache_id != 3)
+				g_forge.catalog[out_c++] = g_forge.catalog[i];
+		}
+		g_forge.catalog_count = out_c;
 	}
 }
 
@@ -6585,73 +6547,6 @@ static int forge_scan_and_rip_ocetags_folders(int force_reload)
 	return extracted;
 }
 
-int forge_ui_inject_custom_map(char const *donor_map_path)
-{
-	int injected = 0;
-
-	if (!donor_map_path || !donor_map_path[0])
-		return 0;
-
-	/* Rehash Custom Tags from custom_tags/ folder (with Original Xbox Loading Screen progress) */
-	if (strcmp(donor_map_path, "__OCETAGS_FOLDER__") == 0)
-	{
-		injected = forge_scan_and_rip_ocetags_folders(1);
-		forge_runtime_reload_catalogs();
-		if (injected > 0)
-			forge_set_status("Rehashed %d new custom .ocetags package(s) from custom_tags/ into Forge Menu!", injected);
-		else
-			forge_set_status("Rehash complete: All .ocetags packages in custom_tags/ are active in Forge Menu!");
-		return 1;
-	}
-
-	if (strlen(donor_map_path) > 8 && _stricmp(donor_map_path + strlen(donor_map_path) - 8, ".ocetags") == 0)
-	{
-		FILE *manifest_fp = fopen("OpenCE Forge/cached_tags/custom_catalog.txt", "ab");
-		FILE *credits_fp = fopen("OpenCE Forge/credits.md", "ab");
-		forge_xbox_loading_screen_begin();
-		forge_xbox_loading_screen_update(0.5f);
-		injected = forge_rip_ocetags_file_to_cached_tags(donor_map_path, 1, manifest_fp, credits_fp);
-		forge_xbox_loading_screen_end();
-		if (credits_fp)
-			fclose(credits_fp);
-		if (manifest_fp)
-			fclose(manifest_fp);
-		forge_runtime_reload_catalogs();
-		if (injected > 0)
-			forge_set_status("Added custom .ocetags package '%s' to Forge Menu!", donor_map_path);
-		else
-			forge_set_status("Package '%s' is already in Forge Menu!", donor_map_path);
-		return 1;
-	}
-
-	forge_set_status("Place custom .ocetags files in 'OpenCE Forge/custom_tags/' and click SYNC CUSTOM TAGS!");
-	return 0;
-}
-
-#if 0
-static void get_forge_exe_dir_prefix(char *out_dir, size_t out_sz)
-{
-	out_dir[0] = '\0';
-#ifdef _WIN32
-	{
-		char mod_path[512];
-		DWORD len = GetModuleFileNameA(NULL, mod_path, (DWORD)sizeof(mod_path));
-		if (len > 0 && len < sizeof(mod_path))
-		{
-			char *slash = strrchr(mod_path, '\\');
-			if (!slash)
-				slash = strrchr(mod_path, '/');
-			if (slash)
-			{
-				slash[1] = '\0';
-				snprintf(out_dir, out_sz, "%s", mod_path);
-			}
-		}
-	}
-#endif
-}
-
-#endif
 static int is_ce_v609_map_file(char const *path)
 {
 	FILE *f = fopen(path, "rb");
@@ -6806,7 +6701,6 @@ int forge_ui_save_copy_as(char const *new_map_name)
 {
 	char base_map_path[512];
 	char clean_name[64];
-	char const *donors[2];
 	int was_already_saved = g_forge.has_saved_map_once;
 	int ok;
 
@@ -6822,8 +6716,6 @@ int forge_ui_save_copy_as(char const *new_map_name)
 	}
 
 	resolve_current_base_map_path(base_map_path, sizeof(base_map_path));
-	donors[0] = "OpenCE Forge/forge_maps/forgeasset.map";
-	donors[1] = "OpenCE Forge/forge_maps/customforgeasset.map";
 
 #ifdef _WIN32
 	CreateDirectoryA("custom_maps", NULL);
@@ -6831,18 +6723,12 @@ int forge_ui_save_copy_as(char const *new_map_name)
 
 	ok = forge_export_scenario_map(
 		base_map_path,
-		"maps",
-		"custom_maps",
-		donors,
-		2,
 		&g_forge.edit_state,
-		clean_name,
-		"custom_maps");
+		clean_name);
 
 	if (ok)
 	{
-		extern void custom_edition_maps_look_again(void);
-		custom_edition_maps_look_again();
+		forge_menu_custom_edition_maps_look_again();
 		snprintf(g_forge.save_map_name, sizeof(g_forge.save_map_name), "%s", clean_name);
 		g_forge.save_map_name_len = (int)strlen(g_forge.save_map_name);
 		g_forge.has_saved_map_once = 1;
@@ -7145,6 +7031,8 @@ void forge_load_saved_map_state_if_present(char const *map_name)
 			}
 		}
 	}
+	if (g_forge.initialized)
+		forge_runtime_reload_catalogs();
 
 	slash = strrchr(map_name, '\\');
 	if (!slash)
@@ -7549,13 +7437,9 @@ static void ensure_objective_marker_meshes_loaded(void)
 			}
 		}
 		if (all_valid)
-		{
-			s_marker_meshes_loaded_flag = 1;
 			return;
-		}
 	}
 	s_marker_meshes.loaded = 1;
-	s_marker_meshes_loaded_flag = 1;
 
 	CreateDirectoryA("OpenCE Forge", NULL);
 	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
@@ -7625,15 +7509,13 @@ static void draw_translucent_marker_hw_parts(
 	static union real_rgb_color change_colors[4];
 	static real function_values[4];
 	struct real_matrix4x3 node_matrix;
-	long z_shdr_idx, col_shdr_idx;
+	long col_shdr_idx;
 	struct shader *col_shdr_def;
 	int p;
 
 	if (!parts || part_count <= 0)
 		return;
 
-	z_shdr_idx = get_or_create_translucent_marker_shader(color_preset, is_highlighted, 1);
-	(void)z_shdr_idx;
 	col_shdr_idx = get_or_create_translucent_marker_shader(color_preset, is_highlighted, 0);
 	if (col_shdr_idx == NONE)
 		return;
@@ -8604,7 +8486,6 @@ int forge_ui_open_map_for_tag_browser(char const *map_path)
 	if (ce_hdr && ce_hdr->tag_count > 0 && ce_hdr->instances)
 	{
 		int32_t i;
-		unsigned char *made = NULL;
 
 		s_map_browser.is_open = 1;
 		s_map_browser.is_ce_map = 1;
@@ -9617,9 +9498,370 @@ int forge_ui_extract_selected_map_tag(int category_tab, int list_index, char con
 	return 0;
 }
 
+static boolean active_ce_map_bundle_read_cb(
+	void *context,
+	unsigned long offset,
+	unsigned long size,
+	void *buffer)
+{
+	(void)context;
+	custom_edition_cache_read(NONE, (long)offset, (long)size, buffer);
+	return TRUE;
+}
+
+int forge_is_tag_map_local_only(uint32_t group_tag, char const *tag_path)
+{
+	int i;
+
+	if (!tag_path || !tag_path[0] ||
+		group_tag == 'spwn' || group_tag == 'tele' || group_tag == 'flag')
+	{
+		return 0;
+	}
+
+	for (i = 0; i < g_forge.catalog_count; i++)
+	{
+		if (g_forge.catalog[i].group_tag == group_tag &&
+			(_stricmp(g_forge.catalog[i].tag_path, tag_path) == 0 ||
+			 (group_tag == 'vehi' && is_equivalent_stock_vehicle_path(g_forge.catalog[i].tag_path, tag_path))))
+		{
+			if (g_forge.catalog[i].source_cache_id == 2)
+				return 0;
+			if (g_forge.catalog[i].source_cache_id == 3)
+				return 1;
+			if (forge_catalog_entry_allowed(&g_forge.catalog[i]))
+				return 0;
+			return 1;
+		}
+	}
+
+	return (tag_loaded((long)group_tag, tag_path) != NONE) ? 1 : 0;
+}
+
+int forge_cache_active_map_tag(uint32_t group_tag, char const *tag_path)
+{
+	char clean_name[64];
+	char const *leaf;
+	char const *p;
+
+	if (!tag_path || !tag_path[0] ||
+		group_tag == 'spwn' || group_tag == 'tele' || group_tag == 'flag')
+	{
+		return 0;
+	}
+	if (!forge_is_tag_map_local_only(group_tag, tag_path))
+		return 1;
+
+	leaf = tag_path;
+	for (p = tag_path; *p; p++)
+	{
+		if (*p == '\\' || *p == '/')
+			leaf = p + 1;
+	}
+	snprintf(clean_name, sizeof(clean_name), "%s", leaf[0] ? leaf : "custom_tag");
+
+	/* Case 1: Active Custom Edition (v609) map loaded in 0x40440000 */
+	if (custom_edition_cache_tags_loaded())
+	{
+		char const *ce_path = custom_edition_cache_loaded_path();
+		char host_ce_path[512];
+		struct browser_ce_map_header *ce_hdr = (struct browser_ce_map_header *)0x40440000UL;
+		FILE *map_fp = NULL;
+		uint8_t map_hdr[2048];
+		uint32_t tag_data_off, tag_data_sz;
+		char map_name[36], map_build[36];
+		uint8_t *raw_tag_data = NULL;
+		uint8_t *backup_tag_data = NULL;
+		long abs_idx = -1, ti;
+		long prof = 0;
+		struct tag_bundle_source source;
+		struct tag_bundle_report report;
+		struct forge_grow_buf buffer = { NULL, 0, 0 };
+		unsigned long tags_size;
+		byte *copy_tags = NULL;
+		struct tag_bundle_loaded loaded;
+		struct tag_bundle_file_region *regions = NULL;
+		long region_count = 0;
+		static struct tag_bundle_file_region const no_region = { 0, 0 };
+		int added = 0;
+
+		if (!ce_path || !ce_path[0] || !ce_hdr || ce_hdr->tag_count <= 0 || !ce_hdr->instances)
+			return 0;
+
+		for (ti = 0; ti < ce_hdr->tag_count; ti++)
+		{
+			if ((uint32_t)ce_hdr->instances[ti].group_tag == group_tag &&
+				ce_hdr->instances[ti].name &&
+				_stricmp(ce_hdr->instances[ti].name, tag_path) == 0)
+			{
+				abs_idx = ti;
+				break;
+			}
+		}
+		if (abs_idx < 0)
+			return 0;
+
+		host_ce_path[0] = '\0';
+		platform_translate_path(ce_path, host_ce_path, sizeof(host_ce_path));
+		if (host_ce_path[0])
+			map_fp = fopen(host_ce_path, "rb");
+		if (!map_fp && (ce_path[0] == 'd' || ce_path[0] == 'D') && ce_path[1] == ':' && (ce_path[2] == '\\' || ce_path[2] == '/'))
+			map_fp = fopen(ce_path + 3, "rb");
+		if (!map_fp)
+			map_fp = fopen(ce_path, "rb");
+		if (!map_fp)
+		{
+			char const *m_slash = strrchr(ce_path, '\\');
+			if (!m_slash)
+				m_slash = strrchr(ce_path, '/');
+			if (m_slash && m_slash[1])
+			{
+				snprintf(host_ce_path, sizeof(host_ce_path), "custom_maps/%s", m_slash + 1);
+				map_fp = fopen(host_ce_path, "rb");
+			}
+		}
+		if (!map_fp)
+			return 0;
+		if (fread(map_hdr, 1, sizeof(map_hdr), map_fp) != sizeof(map_hdr))
+		{
+			fclose(map_fp);
+			return 0;
+		}
+		tag_data_off = *(uint32_t const *)(map_hdr + 0x10);
+		tag_data_sz = *(uint32_t const *)(map_hdr + 0x14);
+		memset(map_name, 0, sizeof(map_name));
+		memset(map_build, 0, sizeof(map_build));
+		memcpy(map_name, map_hdr + 0x20, 31);
+		memcpy(map_build, map_hdr + 0x40, 31);
+
+		if (tag_data_off < 2048u || tag_data_sz < 64u || tag_data_sz > 0x1700000u)
+		{
+			fclose(map_fp);
+			return 0;
+		}
+		raw_tag_data = (uint8_t *)malloc(tag_data_sz);
+		backup_tag_data = (uint8_t *)malloc(tag_data_sz);
+		if (!raw_tag_data || !backup_tag_data ||
+			fseek(map_fp, (long)tag_data_off, SEEK_SET) != 0 ||
+			fread(raw_tag_data, 1, tag_data_sz, map_fp) != tag_data_sz)
+		{
+			free(raw_tag_data);
+			free(backup_tag_data);
+			fclose(map_fp);
+			return 0;
+		}
+		fclose(map_fp);
+
+		port_tag_profiles_scan();
+		if (port_tag_profiles_count() <= 0)
+			prof = port_tag_profiles_create("Forge Custom Tags");
+		else
+			prof = 0;
+		if (prof < 0)
+		{
+			free(raw_tag_data);
+			free(backup_tag_data);
+			return 0;
+		}
+
+		/* Back up live [0x40440000, 0x40440000 + tag_data_sz) and temporarily restore
+		 * raw 'mod2' group tags (regrouped to 'mode' by custom_edition_models_convert),
+		 * geometry->parts (0x84-byte custom_edition_model_part), and model->flags
+		 * so tag_bundle_write & tag_bundle_load_tags_regions walk GBXMODEL_PART_DEFINITION_NAME cleanly. */
+		memcpy(backup_tag_data, (void const *)0x40440000UL, tag_data_sz);
+		for (ti = 0; ti < ce_hdr->tag_count; ti++)
+		{
+			uint32_t inst_grp = (uint32_t)ce_hdr->instances[ti].group_tag;
+			if ((inst_grp == 'mode' || inst_grp == 'mod2') && ce_hdr->instances[ti].base_address)
+			{
+				uint32_t m_addr = (uint32_t)(uintptr_t)ce_hdr->instances[ti].base_address;
+				ce_hdr->instances[ti].group_tag = 'mod2';
+				if (m_addr >= 0x40440000UL && (m_addr - 0x40440000UL) + 0xE8u <= tag_data_sz)
+				{
+					uint32_t m_off = m_addr - 0x40440000UL;
+					int32_t g_cnt = *(int32_t const *)((uint8_t const *)0x40440000UL + m_off + 0xD0u);
+					uint32_t g_addr = *(uint32_t const *)((uint8_t const *)0x40440000UL + m_off + 0xD4u);
+					int32_t s_cnt = *(int32_t const *)((uint8_t const *)0x40440000UL + m_off + 0xDCu);
+					int32_t g;
+					memcpy((uint8_t *)0x40440000UL + m_off, raw_tag_data + m_off, 4u);
+					if (g_cnt > 0 && g_cnt <= 256 && g_addr >= 0x40440000UL &&
+						(g_addr - 0x40440000UL) + (uint32_t)g_cnt * 0x30u <= tag_data_sz)
+					{
+						for (g = 0; g < g_cnt; g++)
+						{
+							uint32_t go = (g_addr - 0x40440000UL) + (uint32_t)g * 0x30u;
+							int32_t p_cnt = *(int32_t const *)((uint8_t const *)0x40440000UL + go + 0x24u);
+							uint32_t p_addr = *(uint32_t const *)((uint8_t const *)0x40440000UL + go + 0x28u);
+							if (p_cnt > 0 && p_cnt <= 256 && p_addr >= 0x40440000UL &&
+								(p_addr - 0x40440000UL) + (uint32_t)p_cnt * 0x84u <= tag_data_sz)
+							{
+								uint32_t po = p_addr - 0x40440000UL;
+								int32_t pi;
+								memcpy((uint8_t *)0x40440000UL + po, raw_tag_data + po, (size_t)p_cnt * 0x84u);
+								for (pi = 0; pi < p_cnt; pi++)
+								{
+									uint8_t *part_p = (uint8_t *)0x40440000UL + po + (uint32_t)pi * 0x84u;
+									int16_t sh_idx = *(int16_t const *)(part_p + 0x04u);
+									if (s_cnt > 0 && (sh_idx < 0 || sh_idx >= s_cnt))
+										*(int16_t *)(part_p + 0x04u) = (int16_t)(s_cnt - 1);
+									/* Clear empty uncompressed/compressed/triangle tag_blocks at +0x20, +0x2C, +0x38 */
+									memset(part_p + 0x20u, 0, 36u);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		memset(&source, 0, sizeof(source));
+		source.tag_header = ce_hdr;
+		source.loaded_size = 0x1700000L;
+		source.read = active_ce_map_bundle_read_cb;
+		source.context = NULL;
+		source.map_name = map_name[0] ? map_name : "custom_map";
+		source.map_build = map_build[0] ? map_build : "01.00.00.0609";
+
+		memset(&report, 0, sizeof(report));
+		if (tag_bundle_write(&source, abs_idx, forge_grow_buf_write, &buffer, &report) != _tag_bundle_status_ok ||
+			!buffer.bytes || buffer.size < TAG_BUNDLE_HEADER_BYTES)
+		{
+			memcpy((void *)0x40440000UL, backup_tag_data, tag_data_sz);
+			free(backup_tag_data);
+			free(raw_tag_data);
+			free(buffer.bytes);
+			return 0;
+		}
+
+		/* Immediately restore live memory in 0x40440000 before any further work */
+		memcpy((void *)0x40440000UL, backup_tag_data, tag_data_sz);
+		free(backup_tag_data);
+		free(raw_tag_data);
+
+		tags_size = tag_bundle_file_data_offset(buffer.bytes);
+		if (tags_size >= TAG_BUNDLE_HEADER_BYTES && tags_size <= buffer.size)
+		{
+			copy_tags = (byte *)malloc(tags_size);
+			if (copy_tags)
+			{
+				memcpy(copy_tags, buffer.bytes, tags_size);
+				if (tag_bundle_load_tags_regions(
+						copy_tags,
+						tags_size,
+						buffer.size,
+						&loaded,
+						&regions,
+						&region_count) == _tag_bundle_status_ok)
+				{
+					added = port_tag_profiles_tag_add(
+						prof,
+						source.map_name,
+						(unsigned long)group_tag,
+						tag_path,
+						buffer.bytes,
+						buffer.size,
+						tags_size,
+						(struct port_tag_store_region const *)(regions ? regions : &no_region),
+						region_count);
+				}
+				free(copy_tags);
+				free(regions);
+			}
+		}
+		free(buffer.bytes);
+
+		if (!added)
+			return 0;
+
+		{
+			long t_slot = port_tag_profiles_tag_find(prof, (unsigned long)group_tag, tag_path);
+			if (t_slot >= 0)
+			{
+				port_tag_profiles_tag_set_enabled(prof, t_slot, 1);
+				port_tag_profiles_tag_set_option(prof, t_slot, "name", clean_name);
+			}
+		}
+		forge_runtime_reload_catalogs();
+		return 1;
+	}
+
+	/* Case 2: Active Xbox (v5) map (stock, custom Xbox, or Forge-saved map) */
+	{
+		char const *cur_map = main_get_map_name();
+		char const *m_slash;
+		char map_leaf[64];
+		char resolved_map[512];
+		static char const *const s_dirs[] = {
+			"maps",
+			"custom_maps",
+			"FORGE CODE/GAME MAPS/XBOX MAPS",
+			"../FORGE CODE/GAME MAPS/XBOX MAPS"
+		};
+		int d, found_map = 0, ok = 0;
+
+		if (!cur_map || !cur_map[0])
+			return 0;
+		m_slash = strrchr(cur_map, '\\');
+		if (!m_slash)
+			m_slash = strrchr(cur_map, '/');
+		snprintf(map_leaf, sizeof(map_leaf), "%s", m_slash ? (m_slash + 1) : cur_map);
+
+		for (d = 0; d < 4; d++)
+		{
+			snprintf(resolved_map, sizeof(resolved_map), "%s/%s.map", s_dirs[d], map_leaf);
+			if (is_xbox_version5_map_file(resolved_map))
+			{
+				found_map = 1;
+				break;
+			}
+		}
+		if (!found_map)
+		{
+			char xbox_vpath[128];
+			snprintf(xbox_vpath, sizeof(xbox_vpath), "d:\\maps\\%s.map", map_leaf);
+			platform_translate_path(xbox_vpath, resolved_map, sizeof(resolved_map));
+			if (is_xbox_version5_map_file(resolved_map))
+				found_map = 1;
+		}
+		if (!found_map)
+		{
+			char xbox_vpath[128];
+			snprintf(xbox_vpath, sizeof(xbox_vpath), "d:\\custom_maps\\%s.map", map_leaf);
+			platform_translate_path(xbox_vpath, resolved_map, sizeof(resolved_map));
+			if (is_xbox_version5_map_file(resolved_map))
+				found_map = 1;
+		}
+		if (!found_map)
+			return 0;
+
+		if (!forge_ui_open_map_for_tag_browser(resolved_map))
+			return 0;
+
+		if (s_map_browser.is_xbox_map && s_map_browser.xbox_tag_buf)
+		{
+			int32_t abs_idx = -1, i;
+			for (i = 0; i < s_map_browser.xbox_tag_count; i++)
+			{
+				if (browser_tag_group_at(i) == group_tag &&
+					_stricmp(browser_tag_name_at(i), tag_path) == 0)
+				{
+					abs_idx = i;
+					break;
+				}
+			}
+			if (abs_idx >= 0)
+				ok = extract_compressed_xbox_map_tag(abs_idx, group_tag, tag_path, clean_name);
+		}
+		forge_ui_close_map_tag_browser();
+		if (ok)
+			forge_runtime_reload_catalogs();
+		return ok;
+	}
+}
+
 static int catalog_entry_matches_installed_tab(struct forge_catalog_entry const *e, int category_tab)
 {
-	if (!e || e->group_tag == 'spwn' || e->group_tag == 'tele' || e->group_tag == 'flag')
+	if (!e || e->source_cache_id == 3 || e->group_tag == 'spwn' || e->group_tag == 'tele' || e->group_tag == 'flag')
 		return 0;
 	return browser_group_matches_category(e->group_tag, category_tab);
 }
@@ -10453,7 +10695,7 @@ static int build_preview_mesh_from_xbox_map_data(
 							vtx_cnt,
 							verts68,
 							(int)vtx_cnt * 68,
-							tag_buf + (vb_addr - tag_base),
+							(void *)(tag_buf + (vb_addr - tag_base)),
 							(int)comp_sz);
 						preview_append_part_vertices_and_strip(
 							mesh,
@@ -10945,3 +11187,412 @@ int forge_ui_build_tag_preview_mesh(
 
 	return 0;
 }
+
+/* ---------- MCC-Converted Custom Edition HUD Tag Normalization */
+
+static int s_mcc_hud_active = 0;
+
+int forge_is_mcc_hud_active(void)
+{
+	return s_mcc_hud_active;
+}
+
+static void halve_hud_placement_offset(uint8_t *pl)
+{
+	int16_t ox = *(int16_t const *)(pl + 0x00);
+	int16_t oy = *(int16_t const *)(pl + 0x02);
+	*(int16_t *)(pl + 0x00) = (int16_t)((ox >= 0 ? (ox + 1) : (ox - 1)) / 2);
+	*(int16_t *)(pl + 0x02) = (int16_t)((oy >= 0 ? (oy + 1) : (oy - 1)) / 2);
+}
+
+static void halve_hud_placement_scale(uint8_t *pl)
+{
+	float sx = *(float const *)(pl + 0x04);
+	float sy = *(float const *)(pl + 0x08);
+	*(float *)(pl + 0x04) = (sx == 0.0f) ? 0.5f : (sx * 0.5f);
+	*(float *)(pl + 0x08) = (sy == 0.0f) ? 0.5f : (sy * 0.5f);
+}
+
+static int hud_mto_block_follows_zoom(uint8_t const *mto_block_ptr)
+{
+	int32_t mto_count = *(int32_t const *)(mto_block_ptr + 0x00);
+	uint8_t const *mto_arr = *(uint8_t const *const *)(mto_block_ptr + 0x04);
+	int32_t m;
+
+	if (mto_count <= 0 || mto_count > 64 || !mto_arr)
+		return 0;
+	for (m = 0; m < mto_count; m++)
+	{
+		uint8_t const *mto = mto_arr + (size_t)m * 0x1E0u;
+		int32_t eff_count = *(int32_t const *)(mto + 0x168);
+		uint8_t const *eff_arr = *(uint8_t const *const *)(mto + 0x16C);
+		int32_t e;
+		if (eff_count <= 0 || eff_count > 64 || !eff_arr)
+			continue;
+		for (e = 0; e < eff_count; e++)
+		{
+			uint8_t const *eff = eff_arr + (size_t)e * 0xDCu;
+			int16_t src = *(int16_t const *)(eff + 0x44);
+			if (src == 7) /* _hud_multitexture_overlay_effector_source_zoom_level */
+				return 1;
+		}
+	}
+	return 0;
+}
+
+void forge_normalize_mcc_hud_tags(void)
+{
+	long total = 0;
+	long i;
+	struct forge_cache_file_tag_instance *instances;
+	int found_mcc_hud = 0;
+	int already_normalized = 0;
+	int32_t msg_icons_tag = NONE;
+
+	s_mcc_hud_active = 0;
+	if (!custom_edition_cache_tags_loaded())
+		return;
+
+	instances = (struct forge_cache_file_tag_instance *)cache_files_tag_instances(&total);
+	if (!instances || total <= 0)
+		return;
+
+	for (i = 0; i < total; i++)
+	{
+		uint8_t *base = (uint8_t *)instances[i].base_address;
+		if (!base || instances[i].tag_index == NONE)
+			continue;
+		if (instances[i].group_tag == 'hud#')
+		{
+			int8_t char_w = *(int8_t const *)(base + 0x10);
+			int8_t scr_w = *(int8_t const *)(base + 0x11);
+			uint32_t sentinel = *(uint32_t const *)(base + 0x60);
+			if (sentinel == 0x4D434348u)
+			{
+				found_mcc_hud = 1;
+				already_normalized = 1;
+				break;
+			}
+			if (char_w >= 20 || scr_w >= 16)
+			{
+				*(uint32_t *)(base + 0x60) = 0x4D434348u;
+				found_mcc_hud = 1;
+			}
+		}
+	}
+
+	if (!found_mcc_hud)
+		return;
+
+	s_mcc_hud_active = 1;
+	if (already_normalized)
+		return;
+
+	/* First pass: locate hudg messaging_icons tag index and normalize hudg */
+	for (i = 0; i < total; i++)
+	{
+		uint8_t *base = (uint8_t *)instances[i].base_address;
+		if (!base || instances[i].tag_index == NONE || instances[i].group_tag != 'hudg')
+			continue;
+
+		/* messaging.placement at +0x24 */
+		halve_hud_placement_offset(base + 0x24);
+
+		/* messaging.messaging_icons tag_reference at +0x98 */
+		msg_icons_tag = *(int32_t const *)(base + 0x98 + 0x0C);
+
+		/* waypoint offsets at +0x120 */
+		{
+			int w;
+			for (w = 0; w < 4; w++)
+			{
+				float *wo = (float *)(base + 0x120 + w * 4);
+				if (*wo > 20.0f)
+					*wo = 20.0f;
+			}
+		}
+
+		/* damage_indicators offsets at +0x2FC */
+		{
+			int d;
+			for (d = 0; d < 4; d++)
+			{
+				int16_t *doff = (int16_t *)(base + 0x2FC + d * 2);
+				*doff = (int16_t)(*doff / 2);
+			}
+		}
+	}
+
+	/* Second pass: normalize unhi, grhi, wphi */
+	for (i = 0; i < total; i++)
+	{
+		uint8_t *base = (uint8_t *)instances[i].base_address;
+		uint32_t grp;
+		if (!base || instances[i].tag_index == NONE)
+			continue;
+		grp = instances[i].group_tag;
+
+		if (grp == 'unhi')
+		{
+			int32_t cnt, k;
+			uint8_t *arr;
+
+			/* unit_hud_background (+0x24), shield_panel_background (+0x8C), health_panel_background (+0x15C) */
+			halve_hud_placement_scale(base + 0x24);
+			halve_hud_placement_scale(base + 0x8C);
+			halve_hud_placement_scale(base + 0x15C);
+
+			/* shield_panel_meter (+0xF4), health_panel_meter (+0x1C4) */
+			halve_hud_placement_offset(base + 0xF4);
+			halve_hud_placement_scale(base + 0xF4);
+			halve_hud_placement_offset(base + 0x1C4);
+			halve_hud_placement_scale(base + 0x1C4);
+
+			/* motion_sensor_background (+0x22C) & motion_sensor_foreground (+0x294) */
+			{
+				int16_t ms_bg_x = *(int16_t const *)(base + 0x22C + 0x00);
+				int16_t ms_bg_y = *(int16_t const *)(base + 0x22C + 0x02);
+				int16_t ms_fg_x = *(int16_t const *)(base + 0x294 + 0x00);
+				int16_t ms_fg_y = *(int16_t const *)(base + 0x294 + 0x02);
+				int shifted_20 = (ms_bg_x == 20 && ms_bg_y == 20);
+
+				if (shifted_20)
+				{
+					*(int16_t *)(base + 0x22C + 0x00) = 0;
+					*(int16_t *)(base + 0x22C + 0x02) = 0;
+				}
+				else
+				{
+					halve_hud_placement_offset(base + 0x22C);
+				}
+				halve_hud_placement_scale(base + 0x22C);
+
+				if (ms_fg_x == 20 && ms_fg_y == 20)
+				{
+					*(int16_t *)(base + 0x294 + 0x00) = 0;
+					*(int16_t *)(base + 0x294 + 0x02) = 0;
+				}
+				else
+				{
+					halve_hud_placement_offset(base + 0x294);
+				}
+				halve_hud_placement_scale(base + 0x294);
+
+				/* motion_sensor_center (+0x31C) */
+				{
+					int16_t bx = *(int16_t const *)(base + 0x31C + 0x00);
+					int16_t by = *(int16_t const *)(base + 0x31C + 0x02);
+					if (shifted_20 && bx >= 95 && by >= 95)
+					{
+						*(int16_t *)(base + 0x31C + 0x00) = 41;
+						*(int16_t *)(base + 0x31C + 0x02) = 41;
+					}
+					else
+					{
+						halve_hud_placement_offset(base + 0x31C);
+					}
+					halve_hud_placement_scale(base + 0x31C);
+				}
+			}
+
+			/* auxilary_overlays.elements (+0x368, stride 0x84) */
+			cnt = *(int32_t const *)(base + 0x368);
+			arr = *(uint8_t *const *)(base + 0x36C);
+			if (cnt > 0 && cnt <= 64 && arr)
+			{
+				for (k = 0; k < cnt; k++)
+				{
+					uint8_t *el = arr + (size_t)k * 0x84u;
+					halve_hud_placement_offset(el);
+					halve_hud_placement_scale(el);
+				}
+			}
+
+			/* auxilary_meters (+0x3EC, stride 0x144) */
+			cnt = *(int32_t const *)(base + 0x3EC);
+			arr = *(uint8_t *const *)(base + 0x3F0);
+			if (cnt > 0 && cnt <= 64 && arr)
+			{
+				for (k = 0; k < cnt; k++)
+				{
+					uint8_t *am = arr + (size_t)k * 0x144u;
+					halve_hud_placement_offset(am + 0x14);
+					halve_hud_placement_scale(am + 0x14);
+					halve_hud_placement_offset(am + 0x7C);
+					halve_hud_placement_scale(am + 0x7C);
+				}
+			}
+		}
+		else if (grp == 'grhi')
+		{
+			int32_t cnt, k;
+			uint8_t *arr;
+
+			/* background (+0x24) & total_grenades_background (+0x8C) */
+			halve_hud_placement_offset(base + 0x24);
+			halve_hud_placement_scale(base + 0x24);
+			halve_hud_placement_offset(base + 0x8C);
+			halve_hud_placement_scale(base + 0x8C);
+
+			/* total_grenades_numbers (+0xF4) */
+			halve_hud_placement_offset(base + 0xF4);
+
+			/* overlays (+0x158, stride 0x88) */
+			cnt = *(int32_t const *)(base + 0x158);
+			arr = *(uint8_t *const *)(base + 0x15C);
+			if (cnt > 0 && cnt <= 64 && arr)
+			{
+				for (k = 0; k < cnt; k++)
+				{
+					uint8_t *ov = arr + (size_t)k * 0x88u;
+					halve_hud_placement_offset(ov);
+					halve_hud_placement_scale(ov);
+				}
+			}
+		}
+		else if (grp == 'wphi')
+		{
+			int32_t cnt, k;
+			uint8_t *arr;
+
+			/* static_elements (+0x54, stride 0xB4) */
+			cnt = *(int32_t const *)(base + 0x54);
+			arr = *(uint8_t *const *)(base + 0x58);
+			if (cnt > 0 && cnt <= 64 && arr)
+			{
+				for (k = 0; k < cnt; k++)
+				{
+					uint8_t *st = arr + (size_t)k * 0xB4u;
+					if (hud_mto_block_follows_zoom(st + 0x7C))
+						continue;
+					halve_hud_placement_offset(st + 0x24);
+					halve_hud_placement_scale(st + 0x24);
+				}
+			}
+
+			/* meter_elements (+0x60, stride 0xB4) */
+			cnt = *(int32_t const *)(base + 0x60);
+			arr = *(uint8_t *const *)(base + 0x64);
+			if (cnt > 0 && cnt <= 64 && arr)
+			{
+				for (k = 0; k < cnt; k++)
+				{
+					uint8_t *mt = arr + (size_t)k * 0xB4u;
+					halve_hud_placement_offset(mt + 0x24);
+					halve_hud_placement_scale(mt + 0x24);
+				}
+			}
+
+			/* number_elements (+0x6C, stride 0xA0) */
+			cnt = *(int32_t const *)(base + 0x6C);
+			arr = *(uint8_t *const *)(base + 0x70);
+			if (cnt > 0 && cnt <= 64 && arr)
+			{
+				for (k = 0; k < cnt; k++)
+				{
+					uint8_t *nm = arr + (size_t)k * 0xA0u;
+					uint8_t nflags = *(uint8_t const *)(nm + 0x69);
+					if (nflags & (1 << 1)) /* _hud_number_show_only_when_zoomed_bit */
+						continue;
+					halve_hud_placement_offset(nm + 0x24);
+				}
+			}
+
+			/* crosshairs (+0x78, stride 0x68) -> items (+0x30, stride 0x6C) */
+			cnt = *(int32_t const *)(base + 0x78);
+			arr = *(uint8_t *const *)(base + 0x7C);
+			if (cnt > 0 && cnt <= 64 && arr)
+			{
+				for (k = 0; k < cnt; k++)
+				{
+					uint8_t *ch = arr + (size_t)k * 0x68u;
+					int16_t ch_type = *(int16_t const *)(ch + 0x00);
+					int32_t icnt = *(int32_t const *)(ch + 0x30);
+					uint8_t *iarr = *(uint8_t *const *)(ch + 0x34);
+					int32_t j;
+					if (icnt <= 0 || icnt > 64 || !iarr)
+						continue;
+					for (j = 0; j < icnt; j++)
+					{
+						uint8_t *ci = iarr + (size_t)j * 0x6Cu;
+						float sx = *(float const *)(ci + 0x04);
+						if (ch_type == 1 && sx < 0.4f)
+							continue;
+						halve_hud_placement_offset(ci);
+						halve_hud_placement_scale(ci);
+					}
+				}
+			}
+
+			/* overlay_elements (+0x84, stride 0x68) -> items (+0x30, stride 0x88) */
+			cnt = *(int32_t const *)(base + 0x84);
+			arr = *(uint8_t *const *)(base + 0x88);
+			if (cnt > 0 && cnt <= 64 && arr)
+			{
+				for (k = 0; k < cnt; k++)
+				{
+					uint8_t *oe = arr + (size_t)k * 0x68u;
+					int32_t icnt = *(int32_t const *)(oe + 0x30);
+					uint8_t *iarr = *(uint8_t *const *)(oe + 0x34);
+					int32_t j;
+					if (icnt <= 0 || icnt > 64 || !iarr)
+						continue;
+					for (j = 0; j < icnt; j++)
+					{
+						uint8_t *oi = iarr + (size_t)j * 0x88u;
+						halve_hud_placement_offset(oi);
+						halve_hud_placement_scale(oi);
+					}
+				}
+			}
+
+			/* messaging_icon (+0x114) */
+			{
+				int16_t seq_idx = *(int16_t const *)(base + 0x114);
+				int16_t w_off = *(int16_t const *)(base + 0x116);
+				int16_t ox = *(int16_t const *)(base + 0x118);
+				int16_t oy = *(int16_t const *)(base + 0x11A);
+				uint8_t flags = *(uint8_t const *)(base + 0x123);
+
+				*(int16_t *)(base + 0x118) = (int16_t)(ox / 2);
+				*(int16_t *)(base + 0x11A) = (int16_t)(oy / 2);
+
+				if (!(flags & 2) && msg_icons_tag != NONE && seq_idx >= 0)
+				{
+					long bm_abs = msg_icons_tag & 0xFFFF;
+					if (bm_abs >= 0 && bm_abs < total &&
+						instances[bm_abs].group_tag == 'bitm' &&
+						instances[bm_abs].base_address)
+					{
+						uint8_t const *bm_def = (uint8_t const *)instances[bm_abs].base_address;
+						int32_t seq_cnt = *(int32_t const *)(bm_def + 0x54);
+						uint8_t const *seq_arr = *(uint8_t const *const *)(bm_def + 0x58);
+						int32_t bmp_cnt = *(int32_t const *)(bm_def + 0x60);
+						uint8_t const *bmp_arr = *(uint8_t const *const *)(bm_def + 0x64);
+						if (seq_idx < seq_cnt && seq_arr && bmp_cnt > 0 && bmp_arr)
+						{
+							uint8_t const *seq = seq_arr + (size_t)seq_idx * 0x40u;
+							int32_t spr_cnt = *(int32_t const *)(seq + 0x34);
+							uint8_t const *spr_arr = *(uint8_t const *const *)(seq + 0x38);
+							if (spr_cnt > 0 && spr_arr)
+							{
+								int16_t bm_idx = *(int16_t const *)(spr_arr + 0x00);
+								float left = *(float const *)(spr_arr + 0x08);
+								float right = *(float const *)(spr_arr + 0x0C);
+								if (bm_idx >= 0 && bm_idx < bmp_cnt)
+								{
+									uint8_t const *bd = bmp_arr + (size_t)bm_idx * 0x30u;
+									int16_t bw = *(int16_t const *)(bd + 0x04);
+									float sprite_px = (right - left) * (float)bw * 0.25f;
+									*(int16_t *)(base + 0x116) = (int16_t)(sprite_px + (float)(w_off / 2) + 0.5f);
+									*(uint8_t *)(base + 0x123) = (uint8_t)(flags | 2); /* _hud_icon_absolute_width_bit */
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+

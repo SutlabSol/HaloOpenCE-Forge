@@ -30,7 +30,7 @@ static short map_forge_team_to_engine_team(int16_t forge_team_designator)
 {
 	switch (forge_team_designator)
 	{
-	case _forge_ai_team_friendly_human:
+	case _forge_ai_team_friendly:
 		return _game_team_player; /* Friendly to Spartan players (Human/Player/Blue) */
 	case _forge_ai_team_enemy_flood:
 		return _game_team_flood;
@@ -93,7 +93,7 @@ int32_t forge_ai_spawn_unit_live(
 	placement.owner_team_index = engine_team;
 
 	/* Tint friendly vs enemy change-colors so team allegiance is visually clear */
-	if (team_designator == _forge_ai_team_friendly_human)
+	if (team_designator == _forge_ai_team_friendly)
 	{
 		placement.change_colors[0].red = 0.20f;
 		placement.change_colors[0].green = 0.55f;
@@ -142,24 +142,4 @@ int32_t forge_ai_spawn_unit_live(
 	}
 
 	return (int32_t)actor_index;
-}
-
-void forge_ai_clear_all_live(void)
-{
-	int i;
-	for (i = 0; i < g_forge.live_instance_count; i++)
-	{
-		if (g_forge.live_instances[i].active && g_forge.live_instances[i].is_ai_unit)
-		{
-			if (g_forge.live_instances[i].actor_index != NONE && g_forge.live_instances[i].actor_index >= 0)
-			{
-				actor_erase(g_forge.live_instances[i].actor_index, TRUE);
-			}
-			else if (g_forge.live_instances[i].object_index != NONE && g_forge.live_instances[i].object_index >= 0)
-			{
-				object_delete(g_forge.live_instances[i].object_index);
-			}
-			g_forge.live_instances[i].active = 0;
-		}
-	}
 }

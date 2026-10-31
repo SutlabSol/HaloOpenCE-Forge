@@ -156,7 +156,6 @@ step4:
 	{
 		struct forge_map_blueprint_data *bp = (struct forge_map_blueprint_data *)calloc(1, sizeof(*bp));
 		struct forge_scenario_edit_state *edits;
-		char const *donors[2];
 
 		if (bp && forge_load_map_blueprint("FORGE CODE/GAME MAPS/CUSTOM EDITION DEFAULT MAPS/bloodgulch.map", bp))
 		{
@@ -223,18 +222,10 @@ step4:
 			edits->placed_objects[5].y = -112.0f;
 			edits->placed_objects[5].z = 2.8f;
 
-			donors[0] = forgeasset_out;
-			donors[1] = customforgeasset_out;
-
 			if (forge_export_scenario_map(
 				"OpenCE Forge/forge_maps/bloodgulch.map",
-				"maps",
-				"custom_maps",
-				donors,
-				2,
 				edits,
-				"forge_bloodgulch_demo",
-				"custom_maps"))
+				"forge_bloodgulch_demo"))
 			{
 				valid = forge_validate_custom_edition_map_file(
 					"custom_maps/forge_bloodgulch_demo.map", "custom_maps", &tag_count, &corrs);
