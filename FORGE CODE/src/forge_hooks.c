@@ -2206,7 +2206,8 @@ static char const *const s_forge_bind_labels[FORGE_BIND_COUNT] = {
 	"SNAP TO SURFACE",
 	"ROTATION SNAP",
 	"OBJECT OPTIONS",
-	"DELETE OBJECT"
+	"DELETE OBJECT",
+	"COPY OBJECT"
 };
 
 static struct forge_widget_instance *fw_screen_of(struct forge_widget_instance *w)
@@ -2555,7 +2556,7 @@ static void forge_controls_menu_update(struct forge_widget_instance *list)
 				continue;
 			}
 			row->visible = TRUE;
-			row->vertical_offset = (short)(100 + idx * 26);
+			row->vertical_offset = (short)(98 + idx * 24);
 			fw_text_set_ascii(lbl_w, s_forge_bind_labels[idx]);
 
 			if (s_forge_controls_ui.capturing_action == idx && s_forge_controls_ui.capturing_slot == 0)
@@ -3936,6 +3937,8 @@ BOOL platform_ui_pointer_read(struct forge_sdl_ui_pointer *pointer)
 
 void platform_input_read(struct forge_sdl_input_state *state, BOOL consume_motion)
 {
+	static int s_esc_suppressed_until_up = 0;
+
 	orig_platform_input_read(state, consume_motion);
 	if (state && (!forge_window_is_focused() || !state->focused))
 	{
@@ -3945,6 +3948,7 @@ void platform_input_read(struct forge_sdl_input_state *state, BOOL consume_motio
 		state->mouse_dy = 0.0f;
 		state->mouse_wheel = 0.0f;
 		state->focused = FALSE;
+		s_esc_suppressed_until_up = 0;
 	}
 	else if (state && s_tag_browser.dialog_open)
 	{
@@ -3956,6 +3960,26 @@ void platform_input_read(struct forge_sdl_input_state *state, BOOL consume_motio
 		{
 			s_tag_browser.dialog_open = 0;
 			s_tag_browser.name_box_active = 0;
+		}
+	}
+	else if (state && g_forge_session_enabled && g_forge.initialized && !forge_is_main_menu_active())
+	{
+		/* Suppress SDL_SCANCODE_ESCAPE (41) from opening the native Pause Menu when Escape is pressed
+		 * to cancel/return a held object on the Physics Beam or close a Forge modal, and keep it
+		 * suppressed until the Escape key is released. */
+		if (state->keys[41])
+		{
+			if (g_forge.active_modal != _forge_modal_none ||
+				(g_forge.mode == _forge_mode_3d_monitor && g_forge.grabbed_live_index >= 0))
+			{
+				s_esc_suppressed_until_up = 1;
+			}
+			if (s_esc_suppressed_until_up)
+				state->keys[41] = 0;
+		}
+		else
+		{
+			s_esc_suppressed_until_up = 0;
 		}
 	}
 }

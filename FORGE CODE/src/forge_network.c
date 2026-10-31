@@ -116,11 +116,26 @@ uint32_t forge_catalog_entry_hash(uint32_t group_tag, char const *tag_path)
 
 struct forge_catalog_entry const *forge_find_catalog_entry_by_hash(uint32_t hash)
 {
+	static struct forge_catalog_entry s_fallback_entry;
 	int i;
 	for (i = 0; i < g_forge.catalog_count; i++)
 	{
 		if (forge_catalog_entry_hash(g_forge.catalog[i].group_tag, g_forge.catalog[i].tag_path) == hash)
 			return &g_forge.catalog[i];
+	}
+	/* Fallback: check active live instances (e.g. copied base-map objects or virtual markers) */
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance const *inst = &g_forge.live_instances[i];
+		if (inst->active && inst->tag_path[0] &&
+			forge_catalog_entry_hash(inst->group_tag, inst->tag_path) == hash)
+		{
+			memset(&s_fallback_entry, 0, sizeof(s_fallback_entry));
+			s_fallback_entry.group_tag = inst->group_tag;
+			snprintf(s_fallback_entry.tag_path, sizeof(s_fallback_entry.tag_path), "%s", inst->tag_path);
+			s_fallback_entry.source_cache_id = inst->source_cache_id;
+			return &s_fallback_entry;
+		}
 	}
 	return NULL;
 }

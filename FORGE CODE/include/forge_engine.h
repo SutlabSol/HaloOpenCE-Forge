@@ -16,7 +16,7 @@ extern "C" {
 
 /* ---------- Forge Release Version & Network Protocol Isolation (v1.1.1, 0x4628) */
 
-#define FORGE_VERSION_STRING "1.1.1"
+#define FORGE_VERSION_STRING "2.1.2"
 #define FORGE_NETWORK_VERSION 0x4628
 /* Standard (non-Forge) sessions use OpenCE's own HALO_PORT_NETWORK_VERSION
  * (port/linux/include/halo_port_limits.h), read in forge_get_network_version(),
@@ -220,8 +220,8 @@ struct forge_runtime_state
 
 	/* Forge Controls & Controller State */
 	int using_controller;
-	int bind_vk[10];
-	int bind_gp[10];
+	int bind_vk[11];
+	int bind_gp[11];
 	float controller_look_sens;
 	float controller_fly_speed;
 
@@ -249,7 +249,8 @@ enum forge_bind_action
 	FORGE_BIND_ROT_SNAP = 7,
 	FORGE_BIND_OBJECT_OPTIONS = 8,
 	FORGE_BIND_DELETE_OBJECT = 9,
-	FORGE_BIND_COUNT = 10
+	FORGE_BIND_COPY_OBJECT = 10,
+	FORGE_BIND_COUNT = 11
 };
 
 enum forge_gamepad_button

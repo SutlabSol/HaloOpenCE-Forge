@@ -98,6 +98,7 @@ void forge_controls_init_defaults(void)
 	g_forge.bind_vk[FORGE_BIND_ROT_SNAP]       = 'G';
 	g_forge.bind_vk[FORGE_BIND_OBJECT_OPTIONS] = 'X';
 	g_forge.bind_vk[FORGE_BIND_DELETE_OBJECT]  = 0x2E; /* VK_DELETE */
+	g_forge.bind_vk[FORGE_BIND_COPY_OBJECT]    = 'C';
 
 	g_forge.bind_gp[FORGE_BIND_TOGGLE_MODE]    = FORGE_GP_DPAD_UP;
 	g_forge.bind_gp[FORGE_BIND_PALETTE]        = FORGE_GP_B;
@@ -109,6 +110,7 @@ void forge_controls_init_defaults(void)
 	g_forge.bind_gp[FORGE_BIND_ROT_SNAP]       = FORGE_GP_DPAD_LEFT;
 	g_forge.bind_gp[FORGE_BIND_OBJECT_OPTIONS] = FORGE_GP_WHITE;
 	g_forge.bind_gp[FORGE_BIND_DELETE_OBJECT]  = FORGE_GP_BLACK;
+	g_forge.bind_gp[FORGE_BIND_COPY_OBJECT]    = FORGE_GP_DPAD_RIGHT;
 
 	g_forge.controller_look_sens = 1.0f;
 	g_forge.controller_fly_speed = 1.0f;
@@ -2243,13 +2245,27 @@ int32_t forge_3d_spawn_object_at(
 	if (!tag_path || !tag_path[0])
 		return -1;
 
-	if (g_forge.live_instance_count >= FORGE_MAX_LIVE_INSTANCES)
+	if (g_forge.live_instance_count < FORGE_MAX_LIVE_INSTANCES)
 	{
-		forge_set_status("Forge Object Budget Reached (%d/%d)!", g_forge.live_instance_count, FORGE_MAX_LIVE_INSTANCES);
-		return -1;
+		live_idx = g_forge.live_instance_count++;
 	}
-
-	live_idx = g_forge.live_instance_count++;
+	else
+	{
+		int32_t s;
+		for (s = 0; s < g_forge.live_instance_count; s++)
+		{
+			if (!g_forge.live_instances[s].active)
+			{
+				live_idx = s;
+				break;
+			}
+		}
+		if (live_idx < 0)
+		{
+			forge_set_status("Forge Object Budget Reached (%d/%d)!", FORGE_MAX_LIVE_INSTANCES, FORGE_MAX_LIVE_INSTANCES);
+			return -1;
+		}
+	}
 	inst = &g_forge.live_instances[live_idx];
 	memset(inst, 0, sizeof(*inst));
 	inst->active = 1;
@@ -2689,6 +2705,12 @@ void forge_3d_delete_instance(int32_t live_idx, int broadcast_net)
 	if (broadcast_net && forge_is_multiplayer_session())
 	{
 		forge_network_send_delete_ext(live_idx, old_obj_idx);
+	}
+
+	while (g_forge.live_instance_count > 0 &&
+		!g_forge.live_instances[g_forge.live_instance_count - 1].active)
+	{
+		g_forge.live_instance_count--;
 	}
 }
 
@@ -3221,6 +3243,7 @@ static void forge_cancel_or_release_held_item(void)
 				g_forge.grab_orig_roll,
 				0,
 				1);
+			forge_set_status("Returned '%s'", g_forge.live_instances[restore_live].tag_path);
 		}
 	}
 	g_forge.grabbed_live_index = -1;
@@ -3707,7 +3730,7 @@ static int forge_monitor_try_step(
 void forge_3d_update(float dt)
 {
 	static int prev_f1, prev_f2, prev_f4, prev_f5, prev_f8, prev_esc, prev_x, prev_bk, prev_lmb;
-	static int prev_up, prev_down, prev_left, prev_right, prev_enter, prev_g, prev_z, prev_f, prev_del, prev_rot;
+	static int prev_up, prev_down, prev_left, prev_right, prev_enter, prev_g, prev_z, prev_f, prev_del, prev_rot, prev_copy;
 	static int32_t s_hover_rot_live_idx = -1;
 	static uint32_t s_last_stick_nav_ms = 0;
 	static int s_init_wait_ticks = 0;
@@ -3715,7 +3738,7 @@ void forge_3d_update(float dt)
 	static int s_prev_modal = 0;
 	struct scenario *scen;
 	int cur_f1, cur_f2, cur_f4, cur_f5, cur_f8, cur_esc, cur_x, cur_bk, cur_lmb, cur_rot;
-	int cur_up, cur_down, cur_left, cur_right, cur_enter, cur_g, cur_z, cur_f, cur_del;
+	int cur_up, cur_down, cur_left, cur_right, cur_enter, cur_g, cur_z, cur_f, cur_del, cur_copy;
 	float gp_lx = 0.0f, gp_ly = 0.0f, gp_rx = 0.0f, gp_ry = 0.0f, gp_lt = 0.0f, gp_rt = 0.0f;
 
 	if (g_forge_session_enabled)
@@ -4184,6 +4207,13 @@ void forge_3d_update(float dt)
 		{
 			g_forge.active_modal = _forge_modal_none;
 		}
+		else if ((cur_esc && !prev_esc) &&
+			modal_before_hotkeys == _forge_modal_none &&
+			g_forge.mode == _forge_mode_3d_monitor &&
+			g_forge.grabbed_live_index >= 0)
+		{
+			forge_cancel_or_release_held_item();
+		}
 	}
 
 	prev_f1 = cur_f1;
@@ -4224,6 +4254,8 @@ void forge_3d_update(float dt)
 	cur_f = forge_action_down(FORGE_BIND_SNAP_SURFACE);
 	cur_del = ((!cur_rot && forge_action_down(FORGE_BIND_DELETE_OBJECT)) ||
 			   (GetAsyncKeyState(VK_BACK) & 0x8000)) != 0;
+	cur_copy = (g_forge.active_modal == _forge_modal_none && !cur_rot && g_forge.grabbed_live_index < 0 && !g_forge.koth_group_placing)
+		? forge_action_down(FORGE_BIND_COPY_OBJECT) : 0;
 
 	/* Unified Tabbed Spawn Palette Menu: [<-] / [->] switches category, [Up] / [Down] / Scroll selects item */
 	if (g_forge.active_modal == _forge_modal_spawn_palette)
@@ -5323,6 +5355,131 @@ void forge_3d_update(float dt)
 			}
 		}
 
+		/* Copy / Duplicate Hovered Object when NOT holding anything ([C] or Controller D-Pad Right) */
+		if (g_forge.active_modal == _forge_modal_none && g_forge.grabbed_live_index < 0 && cur_copy && !prev_copy)
+		{
+			/* Not holding anything: duplicate the object or marker under the reticle and grab the new copy! */
+			int best = g_forge.hovered_live_index;
+
+				if (best < 0 && g_forge.hovered_object_index != NONE)
+					best = adopt_default_scenario_object(g_forge.hovered_object_index);
+
+				if (best < 0)
+				{
+					int i;
+					float best_marker_dist = 20.0f;
+					for (i = 0; i < g_forge.live_instance_count; i++)
+					{
+						struct forge_live_instance *inst = &g_forge.live_instances[i];
+						float dx, dy, dz, along, perp_sq;
+						if (!inst->active || inst->object_index != NONE)
+							continue;
+						dx = inst->x - g_forge.cam_x;
+						dy = inst->y - g_forge.cam_y;
+						dz = inst->z - g_forge.cam_z;
+						along = dx * fwd.i + dy * fwd.j + dz * fwd.k;
+						if (along < 0.3f || along > best_marker_dist)
+							continue;
+						perp_sq = (dx * dx + dy * dy + dz * dz) - (along * along);
+						if (perp_sq < (0.85f * 0.85f))
+						{
+							best_marker_dist = along;
+							best = i;
+						}
+					}
+				}
+
+				if (best < 0)
+				{
+					int i;
+					float best_dist = 20.0f;
+					for (i = 0; i < g_forge.live_instance_count; i++)
+					{
+						struct forge_live_instance *inst = &g_forge.live_instances[i];
+						float dx, dy, dz, along, perp_sq;
+						if (!inst->active)
+							continue;
+						dx = inst->x - g_forge.cam_x;
+						dy = inst->y - g_forge.cam_y;
+						dz = inst->z - g_forge.cam_z;
+						along = dx * fwd.i + dy * fwd.j + dz * fwd.k;
+						if (along < 0.5f || along > best_dist)
+							continue;
+						perp_sq = (dx * dx + dy * dy + dz * dz) - (along * along);
+						if (perp_sq < 2.25f)
+						{
+							best_dist = along;
+							best = i;
+						}
+					}
+				}
+
+				if (best >= 0 && best < g_forge.live_instance_count)
+				{
+					struct forge_live_instance src_inst = g_forge.live_instances[best];
+					float dx, dy, dz, dist;
+					int32_t spawned_idx;
+
+					if (src_inst.object_index != NONE)
+					{
+						struct object_datum *obj = forge_valid_object_get(src_inst.object_index);
+						if (obj)
+						{
+							real_vector3d efwd, eup;
+							float df, du;
+							src_inst.x = obj->object.position.x;
+							src_inst.y = obj->object.position.y;
+							src_inst.z = obj->object.position.z;
+							euler_to_forward_up(src_inst.yaw, src_inst.pitch, src_inst.roll, &efwd, &eup);
+							df = (efwd.i - obj->object.forward.i) * (efwd.i - obj->object.forward.i) +
+								(efwd.j - obj->object.forward.j) * (efwd.j - obj->object.forward.j) +
+								(efwd.k - obj->object.forward.k) * (efwd.k - obj->object.forward.k);
+							du = (eup.i - obj->object.up.i) * (eup.i - obj->object.up.i) +
+								(eup.j - obj->object.up.j) * (eup.j - obj->object.up.j) +
+								(eup.k - obj->object.up.k) * (eup.k - obj->object.up.k);
+							if (df > 0.0004f || du > 0.0004f)
+								forward_up_to_euler(&obj->object.forward, &obj->object.up, &src_inst.yaw, &src_inst.pitch, &src_inst.roll);
+						}
+					}
+
+					dx = src_inst.x - g_forge.cam_x;
+					dy = src_inst.y - g_forge.cam_y;
+					dz = src_inst.z - g_forge.cam_z;
+					dist = (float)sqrt((double)(dx * dx + dy * dy + dz * dz));
+					if (dist < 1.5f) dist = 1.5f;
+					if (dist > 20.0f) dist = 20.0f;
+
+					spawned_idx = forge_3d_spawn_object_at(
+						src_inst.group_tag,
+						src_inst.tag_path,
+						src_inst.source_cache_id,
+						src_inst.x,
+						src_inst.y,
+						src_inst.z,
+						src_inst.yaw,
+						src_inst.pitch,
+						src_inst.roll,
+						src_inst.team_designator,
+						1);
+					if (spawned_idx >= 0 && spawned_idx < g_forge.live_instance_count)
+					{
+						struct forge_live_instance *new_inst = &g_forge.live_instances[spawned_idx];
+						new_inst->gametype_flags = src_inst.gametype_flags;
+						if (new_inst->edit_entry_index >= 0 && new_inst->edit_entry_index < g_forge.edit_state.placed_object_count)
+							g_forge.edit_state.placed_objects[new_inst->edit_entry_index].gametype_flags = src_inst.gametype_flags;
+						g_forge.koth_group_placing = 0;
+						g_forge.grabbed_live_index = spawned_idx;
+						g_forge.grabbed_object_index = new_inst->object_index;
+						g_forge.grabbed_is_new_spawn = 1;
+						g_forge.grab_distance = dist;
+						g_forge.grab_yaw = new_inst->yaw;
+						g_forge.grab_pitch = new_inst->pitch;
+						g_forge.grab_roll = new_inst->roll;
+						forge_set_status("Copied '%s'", new_inst->tag_path);
+					}
+				}
+		}
+
 		/* Update Grabbed Object Transform */
 		if (g_forge.grabbed_live_index >= 0 && g_forge.grabbed_live_index < g_forge.live_instance_count)
 		{
@@ -5551,6 +5708,7 @@ update_prev_keys:
 	prev_rot = cur_rot;
 	prev_bk = cur_bk;
 	prev_lmb = cur_lmb;
+	prev_copy = cur_copy;
 }
 
 static void forge_compute_live_monitor_camera_pose(
@@ -5871,6 +6029,7 @@ void forge_3d_draw_hud(
 		char const *p_snap = forge_action_prompt(FORGE_BIND_ROT_SNAP);
 		char const *p_opts = forge_action_prompt(FORGE_BIND_OBJECT_OPTIONS);
 		char const *p_del = forge_action_prompt(FORGE_BIND_DELETE_OBJECT);
+		char const *p_copy = forge_action_prompt(FORGE_BIND_COPY_OBJECT);
 		char const *p_click = g_forge.using_controller ? "{RT}" : "[CLICK]";
 		char const *p_dist = g_forge.using_controller ? "{DPAD}" : "[SCROLL]";
 		char const *p_esc_save = g_forge.using_controller ? "{START}" : "[ESC]";
@@ -5916,8 +6075,8 @@ void forge_3d_draw_hud(
 			{
 				char upper_lbl[96];
 				format_clean_uppercase_item_name(g_forge.hovered_object_label, upper_lbl, sizeof(upper_lbl));
-				snprintf(buf, sizeof(buf), "%s %s", p_click, upper_lbl);
-				draw_ce_menu_str_box(0, font_index, (short)(cx - 160), (short)(cy + 16), (short)(cx + 160), (short)(cy + 42), 2, buf, 0xFFFFFFFFu);
+				snprintf(buf, sizeof(buf), "%s %s   %s COPY", p_click, upper_lbl, p_copy);
+				draw_ce_menu_str_box(0, font_index, (short)(cx - 220), (short)(cy + 16), (short)(cx + 220), (short)(cy + 42), 2, buf, 0xFFFFFFFFu);
 			}
 
 			/* Top-Right Forge Mode Status & Budget Box (positioned right below the health/shield HUD,
@@ -5930,8 +6089,17 @@ void forge_3d_draw_hud(
 			draw_ce_pause_box(px0, py0, (short)(px1 - px0), (short)(py1 - py0), 0);
 
 			draw_ce_menu_str(1, font_index, (short)(px0 + 14), (short)(py0 + 6), "FORGE", 0xFFFFFFFFu);
-			snprintf(buf, sizeof(buf), "%d / %d",
-				g_forge.live_instance_count, FORGE_MAX_LIVE_INSTANCES);
+			{
+				int active_count = 0;
+				int ii;
+				for (ii = 0; ii < g_forge.live_instance_count; ii++)
+				{
+					if (g_forge.live_instances[ii].active)
+						active_count++;
+				}
+				snprintf(buf, sizeof(buf), "%d / %d",
+					active_count, FORGE_MAX_LIVE_INSTANCES);
+			}
 			draw_ce_menu_str_box(1, font_index, (short)(px0 + 84), (short)(py0 + 6), (short)(px1 - 14), (short)(py0 + 30), 1 /* right */,
 				buf, 0xFFFFFFFFu);
 
@@ -5947,12 +6115,13 @@ void forge_3d_draw_hud(
 				{
 					char line1[160];
 					char line2[160];
+					char const *p_cancel = g_forge.using_controller ? "{B}" : "[ESC]";
 					snprintf(line1, sizeof(line1),
 						"%s PLACE  %s %.0fM  %s PITCH/YAW  %s SURFACE",
 						p_click, p_dist, g_forge.grab_distance, p_rot, p_surf);
 					snprintf(line2, sizeof(line2),
-						"%s FLOOR  %s OPTIONS  %s DELETE",
-						p_floor, p_opts, p_del);
+						"%s FLOOR  %s OPTIONS  %s DELETE  %s CANCEL",
+						p_floor, p_opts, p_del, p_cancel);
 					draw_sized_bottom_pill_bar(
 						font_index, window_x0, window_x1, (short)(window_y1 - 2),
 						line1, line2, 0, _forge_ui_area_bottom_bar, 0xFF2896FFu, &bar_top_y);
@@ -5962,14 +6131,14 @@ void forge_3d_draw_hud(
 					if (g_forge.has_saved_map_once)
 					{
 						snprintf(buf, sizeof(buf),
-							"%s OBJECTS  %s GRAB  %s VIEW  %s SAVE  %s PLAY",
-							p_pal, p_click, p_view, p_qsave, p_toggle);
+							"%s OBJECTS  %s GRAB  %s COPY  %s VIEW  %s SAVE  %s PLAY",
+							p_pal, p_click, p_copy, p_view, p_qsave, p_toggle);
 					}
 					else
 					{
 						snprintf(buf, sizeof(buf),
-							"%s OBJECTS  %s GRAB  %s VIEW  %s SAVE  %s PLAY",
-							p_pal, p_click, p_view, p_esc_save, p_toggle);
+							"%s OBJECTS  %s GRAB  %s COPY  %s VIEW  %s SAVE  %s PLAY",
+							p_pal, p_click, p_copy, p_view, p_esc_save, p_toggle);
 					}
 					draw_sized_bottom_pill_bar(
 						font_index, window_x0, window_x1, (short)(window_y1 - 2),
