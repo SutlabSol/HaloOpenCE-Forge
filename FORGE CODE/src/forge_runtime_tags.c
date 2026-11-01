@@ -6992,12 +6992,10 @@ static void parse_forge_state_text_buffer(char const *text_buf, char const *leaf
 					}
 					else
 					{
-						struct object_datum *fobj = (struct object_datum *)object_try_and_get_and_verify_type(found_oidx, (unsigned long)-1);
-						if (fobj)
+						int32_t li_idx = forge_3d_adopt_or_find_object_instance(found_oidx);
+						if (li_idx >= 0)
 						{
-							fobj->object.position.x = nx;
-							fobj->object.position.y = ny;
-							fobj->object.position.z = nz;
+							forge_3d_move_instance(li_idx, nx, ny, nz, nyaw, npitch, nroll, 0);
 						}
 					}
 				}
@@ -11267,6 +11265,7 @@ void forge_normalize_mcc_hud_tags(void)
 			int8_t char_w = *(int8_t const *)(base + 0x10);
 			int8_t scr_w = *(int8_t const *)(base + 0x11);
 			uint32_t sentinel = *(uint32_t const *)(base + 0x60);
+
 			if (sentinel == 0x4D434348u)
 			{
 				found_mcc_hud = 1;
@@ -11275,6 +11274,27 @@ void forge_normalize_mcc_hud_tags(void)
 			}
 			if (char_w >= 20 || scr_w >= 16)
 			{
+				int b;
+				int32_t bm_tag = *(int32_t const *)(base + 0x0C);
+				for (b = 0; b < 6; b++)
+				{
+					int8_t v = *(int8_t const *)(base + 0x10 + b);
+					*(int8_t *)(base + 0x10 + b) = (int8_t)((v >= 0 ? (v + 1) : (v - 1)) / 2);
+				}
+				/* Clear _bitmap_group_half_hud_scale_bit (0x10) on the 4x number bitmap
+				 * so hud_draw_bitmap_direct can apply a single 0.25f scale uniformly. */
+				if (bm_tag != NONE)
+				{
+					long bm_abs = bm_tag & 0xFFFF;
+					if (bm_abs >= 0 && bm_abs < total &&
+						instances[bm_abs].group_tag == 'bitm' &&
+						instances[bm_abs].base_address)
+					{
+						uint8_t *bm_def = (uint8_t *)instances[bm_abs].base_address;
+						uint16_t bm_flags = *(uint16_t const *)(bm_def + 0x06);
+						*(uint16_t *)(bm_def + 0x06) = (uint16_t)(bm_flags & ~0x0090u);
+					}
+				}
 				*(uint32_t *)(base + 0x60) = 0x4D434348u;
 				found_mcc_hud = 1;
 			}
@@ -11298,8 +11318,8 @@ void forge_normalize_mcc_hud_tags(void)
 		/* messaging.placement at +0x24 */
 		halve_hud_placement_offset(base + 0x24);
 
-		/* messaging.messaging_icons tag_reference at +0x98 */
-		msg_icons_tag = *(int32_t const *)(base + 0x98 + 0x0C);
+		/* messaging.messaging_icons tag_reference at +0xA4 (index at +0xB0) */
+		msg_icons_tag = *(int32_t const *)(base + 0xA4 + 0x0C);
 
 		/* waypoint offsets at +0x120 */
 		{
@@ -11312,18 +11332,18 @@ void forge_normalize_mcc_hud_tags(void)
 			}
 		}
 
-		/* damage_indicators offsets at +0x2FC */
+		/* damage_indicators offsets at +0x310 */
 		{
 			int d;
 			for (d = 0; d < 4; d++)
 			{
-				int16_t *doff = (int16_t *)(base + 0x2FC + d * 2);
+				int16_t *doff = (int16_t *)(base + 0x310 + d * 2);
 				*doff = (int16_t)(*doff / 2);
 			}
 		}
 	}
 
-	/* Second pass: normalize unhi, grhi, wphi */
+	/* Second pass: normalize unhi, grhi, and wphi */
 	for (i = 0; i < total; i++)
 	{
 		uint8_t *base = (uint8_t *)instances[i].base_address;
@@ -11337,67 +11357,70 @@ void forge_normalize_mcc_hud_tags(void)
 			int32_t cnt, k;
 			uint8_t *arr;
 
-			/* unit_hud_background (+0x24), shield_panel_background (+0x8C), health_panel_background (+0x15C) */
+			/* unit_hud_background (+0x24), shield_panel_background (+0x8C), health_panel_background (+0x17C) */
+			halve_hud_placement_offset(base + 0x24);
 			halve_hud_placement_scale(base + 0x24);
+			halve_hud_placement_offset(base + 0x8C);
 			halve_hud_placement_scale(base + 0x8C);
-			halve_hud_placement_scale(base + 0x15C);
+			halve_hud_placement_offset(base + 0x17C);
+			halve_hud_placement_scale(base + 0x17C);
 
-			/* shield_panel_meter (+0xF4), health_panel_meter (+0x1C4) */
+			/* shield_panel_meter (+0xF4), health_panel_meter (+0x1E4) */
 			halve_hud_placement_offset(base + 0xF4);
 			halve_hud_placement_scale(base + 0xF4);
-			halve_hud_placement_offset(base + 0x1C4);
-			halve_hud_placement_scale(base + 0x1C4);
+			halve_hud_placement_offset(base + 0x1E4);
+			halve_hud_placement_scale(base + 0x1E4);
 
-			/* motion_sensor_background (+0x22C) & motion_sensor_foreground (+0x294) */
+			/* motion_sensor.background (+0x26C) & motion_sensor.foreground (+0x2D4) */
 			{
-				int16_t ms_bg_x = *(int16_t const *)(base + 0x22C + 0x00);
-				int16_t ms_bg_y = *(int16_t const *)(base + 0x22C + 0x02);
-				int16_t ms_fg_x = *(int16_t const *)(base + 0x294 + 0x00);
-				int16_t ms_fg_y = *(int16_t const *)(base + 0x294 + 0x02);
+				int16_t ms_bg_x = *(int16_t const *)(base + 0x26C + 0x00);
+				int16_t ms_bg_y = *(int16_t const *)(base + 0x26C + 0x02);
+				int16_t ms_fg_x = *(int16_t const *)(base + 0x2D4 + 0x00);
+				int16_t ms_fg_y = *(int16_t const *)(base + 0x2D4 + 0x02);
 				int shifted_20 = (ms_bg_x == 20 && ms_bg_y == 20);
 
 				if (shifted_20)
 				{
-					*(int16_t *)(base + 0x22C + 0x00) = 0;
-					*(int16_t *)(base + 0x22C + 0x02) = 0;
+					*(int16_t *)(base + 0x26C + 0x00) = 0;
+					*(int16_t *)(base + 0x26C + 0x02) = 0;
 				}
 				else
 				{
-					halve_hud_placement_offset(base + 0x22C);
+					halve_hud_placement_offset(base + 0x26C);
 				}
-				halve_hud_placement_scale(base + 0x22C);
+				halve_hud_placement_scale(base + 0x26C);
 
 				if (ms_fg_x == 20 && ms_fg_y == 20)
 				{
-					*(int16_t *)(base + 0x294 + 0x00) = 0;
-					*(int16_t *)(base + 0x294 + 0x02) = 0;
+					*(int16_t *)(base + 0x2D4 + 0x00) = 0;
+					*(int16_t *)(base + 0x2D4 + 0x02) = 0;
 				}
 				else
 				{
-					halve_hud_placement_offset(base + 0x294);
+					halve_hud_placement_offset(base + 0x2D4);
 				}
-				halve_hud_placement_scale(base + 0x294);
+				halve_hud_placement_scale(base + 0x2D4);
 
-				/* motion_sensor_center (+0x31C) */
+				/* blip_placement (+0x35C) */
 				{
-					int16_t bx = *(int16_t const *)(base + 0x31C + 0x00);
-					int16_t by = *(int16_t const *)(base + 0x31C + 0x02);
+					int16_t bx = *(int16_t const *)(base + 0x35C + 0x00);
+					int16_t by = *(int16_t const *)(base + 0x35C + 0x02);
 					if (shifted_20 && bx >= 95 && by >= 95)
 					{
-						*(int16_t *)(base + 0x31C + 0x00) = 41;
-						*(int16_t *)(base + 0x31C + 0x02) = 41;
+						*(int16_t *)(base + 0x35C + 0x00) = 41;
+						*(int16_t *)(base + 0x35C + 0x02) = 41;
 					}
 					else
 					{
-						halve_hud_placement_offset(base + 0x31C);
+						halve_hud_placement_offset(base + 0x35C);
 					}
-					halve_hud_placement_scale(base + 0x31C);
+					halve_hud_placement_scale(base + 0x35C);
 				}
 			}
 
-			/* auxilary_overlays.elements (+0x368, stride 0x84) */
-			cnt = *(int32_t const *)(base + 0x368);
-			arr = *(uint8_t *const *)(base + 0x36C);
+			/* auxilary_panel.auxilary_overlays (+0x3A4, stride 0x84) */
+			cnt = *(int32_t const *)(base + 0x3A4);
+			arr = *(uint8_t *const *)(base + 0x3A8);
 			if (cnt > 0 && cnt <= 64 && arr)
 			{
 				for (k = 0; k < cnt; k++)
@@ -11408,9 +11431,9 @@ void forge_normalize_mcc_hud_tags(void)
 				}
 			}
 
-			/* auxilary_meters (+0x3EC, stride 0x144) */
-			cnt = *(int32_t const *)(base + 0x3EC);
-			arr = *(uint8_t *const *)(base + 0x3F0);
+			/* auxilary_meters (+0x3CC, stride 0x144) */
+			cnt = *(int32_t const *)(base + 0x3CC);
+			arr = *(uint8_t *const *)(base + 0x3D0);
 			if (cnt > 0 && cnt <= 64 && arr)
 			{
 				for (k = 0; k < cnt; k++)
@@ -11437,9 +11460,9 @@ void forge_normalize_mcc_hud_tags(void)
 			/* total_grenades_numbers (+0xF4) */
 			halve_hud_placement_offset(base + 0xF4);
 
-			/* overlays (+0x158, stride 0x88) */
-			cnt = *(int32_t const *)(base + 0x158);
-			arr = *(uint8_t *const *)(base + 0x15C);
+			/* overlays.items (+0x15C, stride 0x88) */
+			cnt = *(int32_t const *)(base + 0x15C);
+			arr = *(uint8_t *const *)(base + 0x160);
 			if (cnt > 0 && cnt <= 64 && arr)
 			{
 				for (k = 0; k < cnt; k++)
@@ -11455,9 +11478,9 @@ void forge_normalize_mcc_hud_tags(void)
 			int32_t cnt, k;
 			uint8_t *arr;
 
-			/* static_elements (+0x54, stride 0xB4) */
-			cnt = *(int32_t const *)(base + 0x54);
-			arr = *(uint8_t *const *)(base + 0x58);
+			/* statics (+0x60, stride 0xB4) */
+			cnt = *(int32_t const *)(base + 0x60);
+			arr = *(uint8_t *const *)(base + 0x64);
 			if (cnt > 0 && cnt <= 64 && arr)
 			{
 				for (k = 0; k < cnt; k++)
@@ -11470,9 +11493,9 @@ void forge_normalize_mcc_hud_tags(void)
 				}
 			}
 
-			/* meter_elements (+0x60, stride 0xB4) */
-			cnt = *(int32_t const *)(base + 0x60);
-			arr = *(uint8_t *const *)(base + 0x64);
+			/* meters (+0x6C, stride 0xB4) */
+			cnt = *(int32_t const *)(base + 0x6C);
+			arr = *(uint8_t *const *)(base + 0x70);
 			if (cnt > 0 && cnt <= 64 && arr)
 			{
 				for (k = 0; k < cnt; k++)
@@ -11483,9 +11506,9 @@ void forge_normalize_mcc_hud_tags(void)
 				}
 			}
 
-			/* number_elements (+0x6C, stride 0xA0) */
-			cnt = *(int32_t const *)(base + 0x6C);
-			arr = *(uint8_t *const *)(base + 0x70);
+			/* numbers (+0x78, stride 0xA0) */
+			cnt = *(int32_t const *)(base + 0x78);
+			arr = *(uint8_t *const *)(base + 0x7C);
 			if (cnt > 0 && cnt <= 64 && arr)
 			{
 				for (k = 0; k < cnt; k++)
@@ -11498,17 +11521,16 @@ void forge_normalize_mcc_hud_tags(void)
 				}
 			}
 
-			/* crosshairs (+0x78, stride 0x68) -> items (+0x30, stride 0x6C) */
-			cnt = *(int32_t const *)(base + 0x78);
-			arr = *(uint8_t *const *)(base + 0x7C);
+			/* crosshairs (+0x84, stride 0x68) -> items (+0x34, stride 0x6C) */
+			cnt = *(int32_t const *)(base + 0x84);
+			arr = *(uint8_t *const *)(base + 0x88);
 			if (cnt > 0 && cnt <= 64 && arr)
 			{
 				for (k = 0; k < cnt; k++)
 				{
 					uint8_t *ch = arr + (size_t)k * 0x68u;
-					int16_t ch_type = *(int16_t const *)(ch + 0x00);
-					int32_t icnt = *(int32_t const *)(ch + 0x30);
-					uint8_t *iarr = *(uint8_t *const *)(ch + 0x34);
+					int32_t icnt = *(int32_t const *)(ch + 0x34);
+					uint8_t *iarr = *(uint8_t *const *)(ch + 0x38);
 					int32_t j;
 					if (icnt <= 0 || icnt > 64 || !iarr)
 						continue;
@@ -11516,7 +11538,7 @@ void forge_normalize_mcc_hud_tags(void)
 					{
 						uint8_t *ci = iarr + (size_t)j * 0x6Cu;
 						float sx = *(float const *)(ci + 0x04);
-						if (ch_type == 1 && sx < 0.4f)
+						if (sx <= 0.35f)
 							continue;
 						halve_hud_placement_offset(ci);
 						halve_hud_placement_scale(ci);
@@ -11524,16 +11546,16 @@ void forge_normalize_mcc_hud_tags(void)
 				}
 			}
 
-			/* overlay_elements (+0x84, stride 0x68) -> items (+0x30, stride 0x88) */
-			cnt = *(int32_t const *)(base + 0x84);
-			arr = *(uint8_t *const *)(base + 0x88);
+			/* overlays (+0x90, stride 0x68) -> items (+0x34, stride 0x88) */
+			cnt = *(int32_t const *)(base + 0x90);
+			arr = *(uint8_t *const *)(base + 0x94);
 			if (cnt > 0 && cnt <= 64 && arr)
 			{
 				for (k = 0; k < cnt; k++)
 				{
 					uint8_t *oe = arr + (size_t)k * 0x68u;
-					int32_t icnt = *(int32_t const *)(oe + 0x30);
-					uint8_t *iarr = *(uint8_t *const *)(oe + 0x34);
+					int32_t icnt = *(int32_t const *)(oe + 0x34);
+					uint8_t *iarr = *(uint8_t *const *)(oe + 0x38);
 					int32_t j;
 					if (icnt <= 0 || icnt > 64 || !iarr)
 						continue;
@@ -11546,16 +11568,16 @@ void forge_normalize_mcc_hud_tags(void)
 				}
 			}
 
-			/* messaging_icon (+0x114) */
+			/* messaging_icon (+0x13C) */
 			{
-				int16_t seq_idx = *(int16_t const *)(base + 0x114);
-				int16_t w_off = *(int16_t const *)(base + 0x116);
-				int16_t ox = *(int16_t const *)(base + 0x118);
-				int16_t oy = *(int16_t const *)(base + 0x11A);
-				uint8_t flags = *(uint8_t const *)(base + 0x123);
+				int16_t seq_idx = *(int16_t const *)(base + 0x13C);
+				int16_t w_off = *(int16_t const *)(base + 0x13E);
+				int16_t ox = *(int16_t const *)(base + 0x140);
+				int16_t oy = *(int16_t const *)(base + 0x142);
+				uint8_t flags = *(uint8_t const *)(base + 0x14B);
 
-				*(int16_t *)(base + 0x118) = (int16_t)(ox / 2);
-				*(int16_t *)(base + 0x11A) = (int16_t)(oy / 2);
+				*(int16_t *)(base + 0x140) = (int16_t)(ox / 2);
+				*(int16_t *)(base + 0x142) = (int16_t)(oy / 2);
 
 				if (!(flags & 2) && msg_icons_tag != NONE && seq_idx >= 0)
 				{
@@ -11584,8 +11606,8 @@ void forge_normalize_mcc_hud_tags(void)
 									uint8_t const *bd = bmp_arr + (size_t)bm_idx * 0x30u;
 									int16_t bw = *(int16_t const *)(bd + 0x04);
 									float sprite_px = (right - left) * (float)bw * 0.25f;
-									*(int16_t *)(base + 0x116) = (int16_t)(sprite_px + (float)(w_off / 2) + 0.5f);
-									*(uint8_t *)(base + 0x123) = (uint8_t)(flags | 2); /* _hud_icon_absolute_width_bit */
+									*(int16_t *)(base + 0x13E) = (int16_t)(sprite_px + (float)(w_off / 2) + 0.5f);
+									*(uint8_t *)(base + 0x14B) = (uint8_t)(flags | 2); /* _hud_icon_absolute_width_bit */
 								}
 							}
 						}

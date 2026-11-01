@@ -16,7 +16,7 @@ extern "C" {
 
 /* ---------- Forge Release Version & Network Protocol Isolation (v1.1.1, 0x4628) */
 
-#define FORGE_VERSION_STRING "2.2.4"
+#define FORGE_VERSION_STRING "2.2.9"
 #define FORGE_NETWORK_VERSION 0x4628
 #define FORGE_GAME_KIND 0x46
 #define HALO_PORT_NETWORK_VERSION_STOCK 25

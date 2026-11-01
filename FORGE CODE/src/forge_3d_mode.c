@@ -38,6 +38,7 @@
 #include "render/render_cameras.h"
 #include "text/draw_string.h"
 #include "text/font_group.h"
+#include "items/items.h"
 #include "items/item_definitions.h"
 
 #include "objects/object_lights.h"
@@ -2015,13 +2016,17 @@ static int32_t adopt_default_scenario_object(long object_index)
 	for (i = 0; i < (int32_t)g_forge.edit_state.default_edit_count; i++)
 	{
 		struct forge_default_object_edit *de = &g_forge.edit_state.default_edits[i];
-		float dx, dy, dz;
+		float dx, dy, dz, odx, ody, odz;
 		if (!de->active || de->deleted || de->group_tag != grp)
 			continue;
 		dx = de->new_x - inst->x;
 		dy = de->new_y - inst->y;
 		dz = de->new_z - inst->z;
-		if (dx * dx + dy * dy < 9.0f && (float)fabs((double)dz) < 5.0f &&
+		odx = de->orig_x - inst->x;
+		ody = de->orig_y - inst->y;
+		odz = de->orig_z - inst->z;
+		if (((dx * dx + dy * dy < 9.0f && (float)fabs((double)dz) < 5.0f) ||
+			 (odx * odx + ody * ody < 9.0f && (float)fabs((double)odz) < 5.0f)) &&
 			_stricmp(de->tag_path, tname) == 0)
 		{
 			inst->edit_entry_index = i;
@@ -2264,6 +2269,145 @@ static void sync_live_netgame_flags_to_scenario(void)
 	}
 }
 
+static void forge_ensure_object_connected_to_bsp(long object_index, float x, float y, float z)
+{
+	struct object_datum *obj = forge_valid_object_get(object_index);
+	if (!obj)
+		return;
+
+	SET_FLAG(obj->object.flags, _object_cannot_be_garbage_bit, TRUE);
+	SET_FLAG(obj->object.flags, _object_deleted_when_deactivated_bit, FALSE);
+	SET_FLAG(obj->object.flags, _object_outside_of_map_bit, FALSE);
+	if (TEST_FLAG(obj->object.flags, _object_garbage_bit))
+		object_set_garbage(object_index, FALSE);
+
+	if (obj->object.type == _object_type_weapon ||
+		obj->object.type == _object_type_equipment ||
+		obj->object.type == _object_type_garbage)
+	{
+		struct item_datum *it = (struct item_datum *)obj;
+		it->item.detonation_ticks = 0;
+	}
+
+	if (obj->object.parent_object_index == NONE &&
+		(obj->object.first_cluster_reference_index == NONE ||
+		 obj->object.location.cluster_index == NONE ||
+		 TEST_FLAG(obj->object.flags, _object_outside_of_map_bit)))
+	{
+		static float const s_Offsets[10][3] = {
+			{  0.00f,  0.00f,  0.08f },
+			{  0.00f,  0.00f,  0.25f },
+			{  0.00f,  0.00f,  0.60f },
+			{  0.00f,  0.00f,  1.10f },
+			{  0.00f,  0.00f, -0.20f },
+			{  0.25f,  0.00f,  0.15f },
+			{ -0.25f,  0.00f,  0.15f },
+			{  0.00f,  0.25f,  0.15f },
+			{  0.00f, -0.25f,  0.15f },
+			{  0.00f,  0.00f,  2.00f }
+		};
+		struct location loc;
+		real_point3d probe_pt;
+		int k;
+		int found = 0;
+
+		for (k = 0; k < 10; k++)
+		{
+			probe_pt.x = x + s_Offsets[k][0];
+			probe_pt.y = y + s_Offsets[k][1];
+			probe_pt.z = z + s_Offsets[k][2];
+			memset(&loc, 0, sizeof(loc));
+			loc.cluster_index = NONE;
+			scenario_location_from_point(&loc, &probe_pt);
+			if (loc.cluster_index != NONE)
+			{
+				found = 1;
+				break;
+			}
+		}
+		if (!found)
+		{
+			probe_pt.x = g_forge.cam_x;
+			probe_pt.y = g_forge.cam_y;
+			probe_pt.z = g_forge.cam_z;
+			memset(&loc, 0, sizeof(loc));
+			loc.cluster_index = NONE;
+			scenario_location_from_point(&loc, &probe_pt);
+			if (loc.cluster_index != NONE)
+				found = 1;
+		}
+		if (found)
+		{
+			object_disconnect_from_map(object_index);
+			object_reconnect_to_map(object_index, &loc);
+			SET_FLAG(obj->object.flags, _object_outside_of_map_bit, FALSE);
+			object_set_automatic_deactivation(object_index, FALSE);
+			object_activate(object_index);
+		}
+	}
+}
+
+static long forge_create_configured_engine_object(
+	long def_idx,
+	uint32_t group_tag,
+	float x, float y, float z,
+	float yaw, float pitch, float roll)
+{
+	struct object_placement_data placement;
+	long obj_idx;
+	struct object_datum *obj;
+
+	if (def_idx == NONE)
+		return NONE;
+
+	object_placement_data_new(&placement, def_idx, NONE);
+	SET_FLAG(placement.flags, _new_object_never_automatically_delete_bit, TRUE);
+	placement.position.x = x;
+	placement.position.y = y;
+	placement.position.z = z;
+	euler_to_forward_up(yaw, pitch, roll, &placement.forward, &placement.up);
+
+	obj_idx = object_new(&placement);
+	obj = forge_valid_object_get(obj_idx);
+	if (!obj)
+		return NONE;
+
+	SET_FLAG(obj->object.flags, _object_cannot_be_garbage_bit, TRUE);
+	SET_FLAG(obj->object.flags, _object_deleted_when_deactivated_bit, FALSE);
+	SET_FLAG(obj->object.flags, _object_outside_of_map_bit, FALSE);
+	if (group_tag == 'vehi')
+	{
+		SET_FLAG(obj->object.flags, _object_at_rest_bit, FALSE);
+		unit_set_enterable_by_player(obj_idx, TRUE);
+		unit_set_controllable(obj_idx, TRUE);
+	}
+	else if (obj->object.type == _object_type_machine ||
+			 obj->object.type == _object_type_light_fixture ||
+			 obj->object.type == _object_type_control)
+	{
+		struct scenario_device_datum scen_dev;
+		memset(&scen_dev, 0, sizeof(scen_dev));
+		scen_dev.power_group_index = NONE;
+		scen_dev.position_group_index = NONE;
+		scen_dev.flags = 0;
+		device_add_scenario_information(obj_idx, &scen_dev);
+		if (obj->object.type == _object_type_light_fixture)
+		{
+			struct light_fixture_datum *lf = (struct light_fixture_datum *)obj;
+			lf->light_fixture.color.red = 1.0f;
+			lf->light_fixture.color.green = 1.0f;
+			lf->light_fixture.color.blue = 1.0f;
+			lf->light_fixture.intensity = 1.0f;
+			lf->light_fixture.falloff_angle = 1.0f;
+			lf->light_fixture.cutoff_angle = 1.2f;
+		}
+	}
+	object_set_automatic_deactivation(obj_idx, FALSE);
+	object_activate(obj_idx);
+	forge_ensure_object_connected_to_bsp(obj_idx, x, y, z);
+	return obj_idx;
+}
+
 int32_t forge_3d_spawn_object_at(
 	uint32_t group_tag,
 	char const *tag_path,
@@ -2419,56 +2563,8 @@ int32_t forge_3d_spawn_object_at(
 
 		if (def_idx != NONE && !skip_local_obj_new_on_client)
 		{
-			struct object_placement_data placement;
-			object_placement_data_new(&placement, def_idx, NONE);
-			SET_FLAG(placement.flags, _new_object_never_automatically_delete_bit, TRUE);
-			placement.position.x = x;
-			placement.position.y = y;
-			placement.position.z = z;
-			euler_to_forward_up(yaw, pitch, roll, &placement.forward, &placement.up);
-			inst->object_index = object_new(&placement);
-			{
-				struct object_datum *obj = forge_valid_object_get(inst->object_index);
-				if (obj)
-				{
-					SET_FLAG(obj->object.flags, _object_cannot_be_garbage_bit, TRUE);
-					SET_FLAG(obj->object.flags, _object_deleted_when_deactivated_bit, FALSE);
-					SET_FLAG(obj->object.flags, _object_outside_of_map_bit, FALSE);
-					if (group_tag == 'vehi')
-					{
-						SET_FLAG(obj->object.flags, _object_at_rest_bit, FALSE);
-						unit_set_enterable_by_player(inst->object_index, TRUE);
-						unit_set_controllable(inst->object_index, TRUE);
-					}
-					else if (obj->object.type == _object_type_machine ||
-							 obj->object.type == _object_type_light_fixture ||
-							 obj->object.type == _object_type_control)
-					{
-						struct scenario_device_datum scen_dev;
-						memset(&scen_dev, 0, sizeof(scen_dev));
-						scen_dev.power_group_index = NONE;
-						scen_dev.position_group_index = NONE;
-						scen_dev.flags = 0;
-						device_add_scenario_information(inst->object_index, &scen_dev);
-						if (obj->object.type == _object_type_light_fixture)
-						{
-							struct light_fixture_datum *lf = (struct light_fixture_datum *)obj;
-							lf->light_fixture.color.red = 1.0f;
-							lf->light_fixture.color.green = 1.0f;
-							lf->light_fixture.color.blue = 1.0f;
-							lf->light_fixture.intensity = 1.0f;
-							lf->light_fixture.falloff_angle = 1.0f;
-							lf->light_fixture.cutoff_angle = 1.2f;
-						}
-					}
-					object_set_automatic_deactivation(inst->object_index, FALSE);
-					object_activate(inst->object_index);
-				}
-				else
-				{
-					inst->object_index = NONE;
-				}
-			}
+			inst->object_index = forge_create_configured_engine_object(
+				def_idx, group_tag, x, y, z, yaw, pitch, roll);
 		}
 
 		if (g_forge.edit_state.placed_object_count < FORGE_MAX_PLACED_OBJECTS)
@@ -2608,6 +2704,7 @@ void forge_3d_move_instance_ext(
 				object_set_position(inst->object_index, &pos, &fwd, &up);
 				object_set_automatic_deactivation(inst->object_index, FALSE);
 				object_activate(inst->object_index);
+				forge_ensure_object_connected_to_bsp(inst->object_index, x, y, z);
 				obj->object.translational_velocity.i = 0.0f;
 				obj->object.translational_velocity.j = 0.0f;
 				obj->object.translational_velocity.k = -0.02f;
@@ -2620,16 +2717,8 @@ void forge_3d_move_instance_ext(
 				SET_FLAG(obj->object.flags, _object_at_rest_bit, TRUE);
 				object_set_position(inst->object_index, &pos, &fwd, &up);
 				object_set_automatic_deactivation(inst->object_index, FALSE);
-				if (is_held && (obj->object.type == _object_type_vehicle ||
-								obj->object.type == _object_type_weapon ||
-								obj->object.type == _object_type_equipment))
-				{
-					object_deactivate(inst->object_index);
-				}
-				else
-				{
-					object_activate(inst->object_index);
-				}
+				object_activate(inst->object_index);
+				forge_ensure_object_connected_to_bsp(inst->object_index, x, y, z);
 				obj->object.translational_velocity.i = 0.0f;
 				obj->object.translational_velocity.j = 0.0f;
 				obj->object.translational_velocity.k = 0.0f;
@@ -3985,6 +4074,217 @@ static int forge_monitor_try_step(
 	}
 }
 
+static long find_unattached_world_object_near(float ox, float oy, float oz)
+{
+	struct object_iterator iter;
+	struct object_datum *dobj;
+	long found_oidx = NONE;
+	float best_d2 = 9.0f;
+
+	object_iterator_new(&iter, (unsigned long)-1, 0);
+	while ((dobj = object_iterator_next(&iter)) != NULL)
+	{
+		float dx = dobj->object.position.x - ox;
+		float dy = dobj->object.position.y - oy;
+		float dz = dobj->object.position.z - oz;
+		float d2 = dx * dx + dy * dy + dz * dz * 0.25f;
+		if (dobj->object.parent_object_index != NONE)
+			continue;
+		if (dobj->object.type == _object_type_biped &&
+			((struct unit_datum *)dobj)->unit.player_index != NONE)
+			continue;
+		if (d2 < best_d2)
+		{
+			best_d2 = d2;
+			found_oidx = iter.index;
+		}
+	}
+	return found_oidx;
+}
+
+static void forge_reconcile_live_instances(void)
+{
+	static long s_last_game_tick = -1;
+	static struct scenario *s_last_tick_scen = NULL;
+	static long s_last_unit_index = NONE;
+	static int s_last_forge_mode = -1;
+	struct scenario *scen = global_scenario_get();
+	long cur_tick = game_time_get();
+	long cur_unit = player_control_get_unit_index(0);
+	int reverted = 0;
+	int unit_died_or_respawned = 0;
+	int entered_monitor_mode = 0;
+	int i;
+
+	if (game_connection() == _game_connection_network_client)
+		return;
+
+	if (scen != s_last_tick_scen)
+	{
+		s_last_tick_scen = scen;
+		s_last_game_tick = cur_tick;
+		s_last_unit_index = cur_unit;
+		s_last_forge_mode = (int)g_forge.mode;
+	}
+	else
+	{
+		if (s_last_game_tick >= 0 && cur_tick < s_last_game_tick)
+		{
+			/* Halo's single-player death or checkpoint revert (game_state_revert) rewound the game state! */
+			reverted = 1;
+		}
+		if (cur_unit != s_last_unit_index)
+		{
+			unit_died_or_respawned = 1;
+			s_last_unit_index = cur_unit;
+		}
+		if ((int)g_forge.mode == _forge_mode_3d_monitor && s_last_forge_mode != _forge_mode_3d_monitor)
+		{
+			entered_monitor_mode = 1;
+		}
+		s_last_forge_mode = (int)g_forge.mode;
+	}
+	s_last_game_tick = cur_tick;
+
+	/* If the local player died while holding an item, cleanly place/release it so it isn't left mid-grab */
+	if (cur_unit == NONE && g_forge.grabbed_live_index >= 0)
+	{
+		forge_drop_or_place_held_item();
+		if (g_forge.active_modal == _forge_modal_object_properties)
+			g_forge.active_modal = _forge_modal_none;
+	}
+
+	if (reverted)
+	{
+		sync_live_player_spawns_to_scenario();
+		sync_live_netgame_flags_to_scenario();
+
+		/* Re-delete any default scenario objects that were deleted in Forge before game_state_revert() */
+		for (i = 0; i < (int)g_forge.edit_state.default_edit_count; i++)
+		{
+			struct forge_default_object_edit *de = &g_forge.edit_state.default_edits[i];
+			long found_oidx;
+
+			if (!de->active || !de->deleted)
+				continue;
+
+			found_oidx = find_unattached_world_object_near(de->orig_x, de->orig_y, de->orig_z);
+			if (found_oidx != NONE)
+				object_delete(found_oidx);
+		}
+	}
+
+	for (i = 0; i < g_forge.live_instance_count; i++)
+	{
+		struct forge_live_instance *inst = &g_forge.live_instances[i];
+		struct object_datum *obj;
+		uint32_t actual_grp;
+		long def_idx;
+
+		if (inst->group_tag == 'spwn' || inst->group_tag == 'tele' || inst->group_tag == 'flag')
+			continue;
+
+		if (inst->is_default_scenario_object)
+		{
+			if (reverted)
+			{
+				obj = forge_valid_object_get(inst->object_index);
+				if (!obj && inst->active)
+				{
+					long found_oidx = find_unattached_world_object_near(inst->orig_x, inst->orig_y, inst->orig_z);
+					if (found_oidx != NONE)
+					{
+						inst->object_index = found_oidx;
+						obj = forge_valid_object_get(inst->object_index);
+					}
+				}
+				if (obj)
+				{
+					if (!inst->active)
+					{
+						object_delete(inst->object_index);
+						inst->object_index = NONE;
+					}
+					else
+					{
+						forge_3d_move_instance_ext(
+							i,
+							inst->x, inst->y, inst->z,
+							inst->yaw, inst->pitch, inst->roll,
+							0, 0);
+					}
+				}
+			}
+			else if (inst->active && inst->object_index != NONE)
+			{
+				obj = forge_valid_object_get(inst->object_index);
+				if (obj && obj->object.parent_object_index == NONE)
+				{
+					forge_ensure_object_connected_to_bsp(
+						inst->object_index,
+						obj->object.position.x,
+						obj->object.position.y,
+						obj->object.position.z);
+				}
+			}
+			continue;
+		}
+
+		if (!inst->active || inst->is_ai_unit)
+			continue;
+
+		obj = forge_valid_object_get(inst->object_index);
+		if (reverted ||
+			(!obj && inst->object_index != NONE &&
+			 (inst->group_tag != 'eqip' ||
+			  unit_died_or_respawned ||
+			  entered_monitor_mode ||
+			  i == g_forge.grabbed_live_index)))
+		{
+			actual_grp = inst->group_tag;
+			def_idx = forge_resolve_engine_tag(inst->group_tag, inst->tag_path, &actual_grp);
+			if (obj && def_idx != NONE && obj->definition_index != def_idx)
+			{
+				/* Slot was overwritten or reverted to a different object by game_state_revert() */
+				obj = NULL;
+				inst->object_index = NONE;
+			}
+			if (!obj && def_idx != NONE)
+			{
+				inst->object_index = forge_create_configured_engine_object(
+					def_idx,
+					inst->group_tag,
+					inst->x, inst->y, inst->z,
+					inst->yaw, inst->pitch, inst->roll);
+				obj = forge_valid_object_get(inst->object_index);
+				if (obj && i == g_forge.grabbed_live_index)
+					g_forge.grabbed_object_index = inst->object_index;
+			}
+		}
+
+		if (obj)
+		{
+			if (reverted && obj->object.parent_object_index == NONE)
+			{
+				forge_3d_move_instance_ext(
+					i,
+					inst->x, inst->y, inst->z,
+					inst->yaw, inst->pitch, inst->roll,
+					(i == g_forge.grabbed_live_index) ? 1 : 0,
+					0);
+			}
+			else if (obj->object.parent_object_index == NONE)
+			{
+				forge_ensure_object_connected_to_bsp(
+					inst->object_index,
+					obj->object.position.x,
+					obj->object.position.y,
+					obj->object.position.z);
+			}
+		}
+	}
+}
+
 void forge_3d_update(float dt)
 {
 	static int prev_f1, prev_f2, prev_f4, prev_f5, prev_f8, prev_esc, prev_x, prev_bk, prev_lmb;
@@ -4101,6 +4401,9 @@ void forge_3d_update(float dt)
 
 	/* Run collaborative multiplayer sync (late-join state sync, client object adoption, Monitor state heartbeat) */
 	forge_network_sync_tick();
+
+	/* Reconcile live Forge instances so placed items never vanish after player death, checkpoint revert, or BSP surface placement */
+	forge_reconcile_live_instances();
 
 	/* Ensure any vehicle driven by a player has powered seat_power[0] = 1.0f so flyers/hovercraft thrust works */
 	{
@@ -4257,7 +4560,7 @@ void forge_3d_update(float dt)
 			int local_p_abs = forge_get_local_player_abs_index();
 			long unit_idx = player_control_get_unit_index(0);
 			if (g_forge.grabbed_live_index >= 0)
-				forge_cancel_or_release_held_item();
+				forge_drop_or_place_held_item();
 			g_forge.active_modal = _forge_modal_none;
 			if (g_forge.mode == _forge_mode_3d_monitor)
 			{
@@ -4368,7 +4671,7 @@ void forge_3d_update(float dt)
 				else
 				{
 					if (g_forge.grabbed_live_index >= 0)
-						forge_cancel_or_release_held_item();
+						forge_drop_or_place_held_item();
 					g_forge.active_modal = _forge_modal_spawn_palette;
 					g_forge.h3_menu_stage = 1; /* Unified single-stage tabbed menu: cycle categories with [<-] / [->] */
 					if (g_forge.current_category == _forge_cat_bipeds ||
@@ -4573,7 +4876,7 @@ void forge_3d_update(float dt)
 			int32_t spawned_idx = -1;
 
 			if (g_forge.grabbed_live_index >= 0)
-				forge_cancel_or_release_held_item();
+				forge_drop_or_place_held_item();
 
 			/* Perform a fresh raycast along the current camera view ray so newly spawned items
 			 * stick directly to the placement cursor and camera angle! */
@@ -5485,42 +5788,42 @@ void forge_3d_update(float dt)
 
 				forge_sync_live_instance_from_engine_object(&src_inst);
 
-					dx = src_inst.x - g_forge.cam_x;
-					dy = src_inst.y - g_forge.cam_y;
-					dz = src_inst.z - g_forge.cam_z;
-					dist = (float)sqrt((double)(dx * dx + dy * dy + dz * dz));
-					if (dist < 1.5f) dist = 1.5f;
-					if (dist > 20.0f) dist = 20.0f;
+				dx = src_inst.x - g_forge.cam_x;
+				dy = src_inst.y - g_forge.cam_y;
+				dz = src_inst.z - g_forge.cam_z;
+				dist = (float)sqrt((double)(dx * dx + dy * dy + dz * dz));
+				if (dist < 1.5f) dist = 1.5f;
+				if (dist > 20.0f) dist = 20.0f;
 
-					spawned_idx = forge_3d_spawn_object_at(
-						src_inst.group_tag,
-						src_inst.tag_path,
-						src_inst.source_cache_id,
-						src_inst.x,
-						src_inst.y,
-						src_inst.z,
-						src_inst.yaw,
-						src_inst.pitch,
-						src_inst.roll,
-						src_inst.team_designator,
-						1);
-					if (spawned_idx >= 0 && spawned_idx < g_forge.live_instance_count)
-					{
-						struct forge_live_instance *new_inst = &g_forge.live_instances[spawned_idx];
-						new_inst->gametype_flags = src_inst.gametype_flags;
-						if (new_inst->edit_entry_index >= 0 && new_inst->edit_entry_index < g_forge.edit_state.placed_object_count)
-							g_forge.edit_state.placed_objects[new_inst->edit_entry_index].gametype_flags = src_inst.gametype_flags;
-						g_forge.koth_group_placing = 0;
-						g_forge.grabbed_live_index = spawned_idx;
-						g_forge.grabbed_object_index = new_inst->object_index;
-						g_forge.grabbed_is_new_spawn = 1;
-						g_forge.grab_distance = dist;
-						g_forge.grab_yaw = new_inst->yaw;
-						g_forge.grab_pitch = new_inst->pitch;
-						g_forge.grab_roll = new_inst->roll;
-						forge_set_status("Copied '%s'", new_inst->tag_path);
-					}
+				spawned_idx = forge_3d_spawn_object_at(
+					src_inst.group_tag,
+					src_inst.tag_path,
+					src_inst.source_cache_id,
+					src_inst.x,
+					src_inst.y,
+					src_inst.z,
+					src_inst.yaw,
+					src_inst.pitch,
+					src_inst.roll,
+					src_inst.team_designator,
+					1);
+				if (spawned_idx >= 0 && spawned_idx < g_forge.live_instance_count)
+				{
+					struct forge_live_instance *new_inst = &g_forge.live_instances[spawned_idx];
+					new_inst->gametype_flags = src_inst.gametype_flags;
+					if (new_inst->edit_entry_index >= 0 && new_inst->edit_entry_index < g_forge.edit_state.placed_object_count)
+						g_forge.edit_state.placed_objects[new_inst->edit_entry_index].gametype_flags = src_inst.gametype_flags;
+					g_forge.koth_group_placing = 0;
+					g_forge.grabbed_live_index = spawned_idx;
+					g_forge.grabbed_object_index = new_inst->object_index;
+					g_forge.grabbed_is_new_spawn = 1;
+					g_forge.grab_distance = dist;
+					g_forge.grab_yaw = new_inst->yaw;
+					g_forge.grab_pitch = new_inst->pitch;
+					g_forge.grab_roll = new_inst->roll;
+					forge_set_status("Copied '%s'", new_inst->tag_path);
 				}
+			}
 		}
 
 		/* Update Grabbed Object Transform */

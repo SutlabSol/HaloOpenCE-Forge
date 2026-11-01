@@ -4128,7 +4128,17 @@ void hud_draw_bitmap_direct(
 	boolean is_interface_bitmap)
 {
 	if (forge_is_mcc_hud_active())
-		scale *= 0.25f;
+	{
+		int16_t bw = bitmap ? *(int16_t const *)((uint8_t const *)bitmap + 0x04) : 0;
+		int16_t bh = bitmap ? *(int16_t const *)((uint8_t const *)bitmap + 0x06) : 0;
+		float clip_w = clip ? (clip->x1 - clip->x0) : 0.0f;
+		/* 2x bitmaps (hud_waypoints 256x256, hud_damage_arrows 462/512) need 0.5f;
+		 * 4x bitmaps (hud_counter_numbers 72x48, hud_msg_icons 93x93) need 0.25f. */
+		if ((bw == 256 && bh == 256) || clip_w > 0.5f)
+			scale *= 0.5f;
+		else
+			scale *= 0.25f;
+	}
 	orig_hud_draw_bitmap_direct(
 		bitmap,
 		placement,
@@ -4153,7 +4163,6 @@ void hud_draw_numbers(
 	if (forge_is_mcc_hud_active() && numbers)
 	{
 		struct forge_hud_number_element adjusted;
-		real eff_scale = (override_scale > 0.0f) ? (override_scale * 0.5f) : 0.5f;
 		memcpy(&adjusted, numbers, sizeof(adjusted));
 		if (adjusted.digits == 3 && adjusted.fractional_digits == 1 && (adjusted.number_flags & 5) == 5)
 		{
@@ -4168,7 +4177,7 @@ void hud_draw_numbers(
 			decimal_value,
 			draw_flags,
 			flash_reference_time,
-			eff_scale);
+			override_scale);
 		return;
 	}
 	orig_hud_draw_numbers(
@@ -4181,9 +4190,4 @@ void hud_draw_numbers(
 		flash_reference_time,
 		override_scale);
 }
-
-
-
-
-
 
