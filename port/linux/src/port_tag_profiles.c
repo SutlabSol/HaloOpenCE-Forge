@@ -428,13 +428,13 @@ static int file_write(const char *path, const void *bytes, unsigned long size)
 {
 	char temporary[MAXIMUM_PATH_LENGTH];
 	int written;
-#ifdef HALO_GUEST
+#ifdef HALO_ARM64_GUEST
 	FILE *file;
 #endif
 
 	if (snprintf(temporary, sizeof(temporary), "%s.new", path) >= (int)sizeof(temporary))
 		return 0;
-#ifdef HALO_GUEST
+#ifdef HALO_ARM64_GUEST
 	/* (the guest's own C library: SDL's are the host's) */
 	file = fopen(temporary, "wb");
 	if (!file)
@@ -458,7 +458,7 @@ static int file_write(const char *path, const void *bytes, unsigned long size)
 /* a file put in another's place (port_tag_store.c's pack written again) */
 static int file_replace(const char *from, const char *to)
 {
-#ifdef HALO_GUEST
+#ifdef HALO_ARM64_GUEST
 	return rename(from, to) == 0;
 #else
 	return SDL_RenamePath(from, to);

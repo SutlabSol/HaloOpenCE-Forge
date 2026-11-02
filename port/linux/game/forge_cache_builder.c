@@ -7,6 +7,9 @@ attribution generator, 2D blueprint collision extractor, and "Save Copy As..."
 scenario exporter (.map, 140x114 .bmp, .txt).
 */
 
+#ifndef HALO_RELEASE
+#define HALO_RELEASE
+#endif
 #include "cseries/cseries.h"
 #include "forge_cache_builder.h"
 #include "cache_file_formats.h"
@@ -23,7 +26,7 @@ scenario exporter (.map, 140x114 .bmp, .txt).
 #include "items/item_definitions.h"
 #include "../src/port_tag_profiles.h"
 #include "tag_bundle.h"
-#include "zlib_prefixed.h"
+#include "../../third_party/zlib/zlib_prefixed.h"
 
 extern void *custom_edition_sounds_encode(
 	void const *samples,
@@ -37,20 +40,13 @@ extern void *custom_edition_sounds_encode(
 extern void platform_translate_path(char const *xbox_path, char *out_path, size_t out_size);
 
 #include <ctype.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <xtl.h>
+#include "forge_engine.h"
 
-#ifdef _WIN32
-#include <direct.h>
-#include <io.h>
-#define FORGE_MKDIR(p) _mkdir(p)
-#else
-#include <sys/stat.h>
-#include <sys/types.h>
-#define FORGE_MKDIR(p) mkdir((p), 0755)
-#endif
+#define FORGE_MKDIR(p) CreateDirectoryA((p), NULL)
 
 #undef malloc
 #undef calloc
@@ -1721,7 +1717,6 @@ static int cb_load_matching_ocetags_json(
 	char **out_json,
 	size_t *out_json_len)
 {
-#ifdef _WIN32
 	static char const *const s_dirs[] = {
 		"OpenCE Forge/custom_tags",
 		"custom_tags",
@@ -1745,19 +1740,19 @@ static int cb_load_matching_ocetags_json(
 	for (d = 0; d < (int)(sizeof(s_dirs) / sizeof(s_dirs[0])); d++)
 	{
 		char pattern[512];
-		struct _finddata_t fd;
-		intptr_t h;
+		WIN32_FIND_DATAA fd;
+		HANDLE h;
 		snprintf(pattern, sizeof(pattern), "%s/*.ocetags", s_dirs[d]);
-		h = _findfirst(pattern, &fd);
-		if (h != -1)
+		h = FindFirstFileA(pattern, &fd);
+		if (h != INVALID_HANDLE_VALUE)
 		{
 			do
 			{
-				if (!(fd.attrib & _A_SUBDIR))
+				if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
 				{
 					char full_path[512];
 					FILE *fp;
-					snprintf(full_path, sizeof(full_path), "%s/%s", s_dirs[d], fd.name);
+					snprintf(full_path, sizeof(full_path), "%s/%s", s_dirs[d], fd.cFileName);
 					fp = fopen(full_path, "rb");
 					if (fp)
 					{
@@ -1793,7 +1788,7 @@ static int cb_load_matching_ocetags_json(
 											{
 												jbuf[fsz] = 0;
 												fclose(fp);
-												_findclose(h);
+												CloseHandle(h);
 												if (out_json) *out_json = jbuf;
 												if (out_json_len) *out_json_len = (size_t)fsz;
 												return 1;
@@ -1807,16 +1802,10 @@ static int cb_load_matching_ocetags_json(
 						fclose(fp);
 					}
 				}
-			} while (_findnext(h, &fd) == 0);
-			_findclose(h);
+			} while (FindNextFileA(h, &fd));
+			CloseHandle(h);
 		}
 	}
-#else
-	(void)req_group;
-	(void)req_path;
-	if (out_json) *out_json = NULL;
-	if (out_json_len) *out_json_len = 0;
-#endif
 	return 0;
 }
 
@@ -3322,9 +3311,7 @@ static int cb_find_xbox_donor_map_for_tag(
 		"OpenCE Forge/cached_tags/xbox_cache",
 		"maps",
 		"assets/maps",
-		"../assets/maps",
-		"../FORGE CODE/GAME MAPS/XBOX DEFAULT MAPS",
-		"FORGE CODE/GAME MAPS/XBOX DEFAULT MAPS"
+		"../assets/maps"
 	};
 	size_t m, d;
 
@@ -3332,20 +3319,19 @@ static int cb_find_xbox_donor_map_for_tag(
 		return 0;
 	out_map_path[0] = '\0';
 
-#ifdef _WIN32
 	/* 1. Check .fxtg compressed Xbox tag bundles in OpenCE Forge/custom_tags/ */
 	{
-		struct _finddata_t fd;
-		intptr_t h = _findfirst("OpenCE Forge/custom_tags/*.fxtg", &fd);
-		if (h != -1)
+		WIN32_FIND_DATAA fd;
+		HANDLE h = FindFirstFileA("OpenCE Forge/custom_tags/*.fxtg", &fd);
+		if (h != INVALID_HANDLE_VALUE)
 		{
 			do
 			{
-				if (!(fd.attrib & _A_SUBDIR))
+				if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
 				{
 					char fxtg_path[512];
 					FILE *fp;
-					snprintf(fxtg_path, sizeof(fxtg_path), "OpenCE Forge/custom_tags/%s", fd.name);
+					snprintf(fxtg_path, sizeof(fxtg_path), "OpenCE Forge/custom_tags/%s", fd.cFileName);
 					fp = fopen(fxtg_path, "rb");
 					if (fp)
 					{
@@ -3384,7 +3370,7 @@ static int cb_find_xbox_donor_map_for_tag(
 										free(cbuf);
 										free(ubuf);
 										fclose(fp);
-										_findclose(h);
+										CloseHandle(h);
 										return 1;
 									}
 								}
@@ -3395,11 +3381,10 @@ static int cb_find_xbox_donor_map_for_tag(
 						fclose(fp);
 					}
 				}
-			} while (_findnext(h, &fd) == 0);
-			_findclose(h);
+			} while (FindNextFileA(h, &fd));
+			CloseHandle(h);
 		}
 	}
-#endif
 
 	for (d = 0; d < sizeof(map_dirs) / sizeof(map_dirs[0]); d++)
 	{
@@ -6303,4 +6288,3 @@ int forge_export_scenario_map(
 	forge_source_map_close(&base_map);
 	return 1;
 }
-

@@ -515,7 +515,7 @@ SCREENS["network_setup/in_game"] = {
 # Controls Setup: the keyboard and mouse's actions, in groups (the order of
 # port/linux/game/menu_functions.c's table of them)
 CONTROL_GROUPS = ["MOVEMENT", "WEAPONS", "ACTIONS", "COMMUNICATION", "FORGE", "FORGE PAD"]
-CONTROL_ROWS = 10
+CONTROL_ROWS = 11
 
 # the settings whose rows have the wider spinner (a device's name)
 WIDE_SETTINGS = {"audio.output_device", "audio.input_device", "streamer.slurs", "streamer.swearing",
@@ -814,6 +814,8 @@ def _controls_screen() -> list:
     # (B cancels a key's setting first)
     return [line.replace('<on event="b" back="true"/>', '<on event="b" run="controls back handler"/>')
             .replace('<on event="back" back="true"/>', '<on event="back" run="controls back handler"/>')
+            .replace(f'<child widget="{base}/op_command_11" x="54" y="359"/>',
+                     f'<child widget="{base}/op_command_11" x="54" y="339"/>')
             for line in lines]
 
 

@@ -740,7 +740,7 @@ static struct observer_result const *render_interpolation_direct_camera(
 #endif
 }
 
-struct observer_result const *render_interpolation_camera(
+struct observer_result const *orig_render_interpolation_camera(
 	short local_player_index,
 	struct observer_result const *observer)
 {

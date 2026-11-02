@@ -32,6 +32,9 @@ A name another tag of its group has (any case) is numbered ("battle rifle
 
 /* ---------- headers */
 
+#ifndef HALO_RELEASE
+#define HALO_RELEASE
+#endif
 #include "cseries.h"
 #include "interface/hud_definitions.h"
 #include "items/item_definitions.h"

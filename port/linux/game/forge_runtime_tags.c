@@ -1,11 +1,13 @@
 /*
- * OpenCE : Forge ("halo.exe")
+ * OpenCE : Forge
  * Runtime Tag Catalog, Cached Tag Folder System (OpenCE Forge/cached_tags/),
  * Dynamic Runtime Tag Table Expansion, Multiplayer Asset Guard, Custom Tag Extraction,
  * Standalone Map Baking, Dynamic Network Version & 343 Guilty Spark Hardware Model Renderer.
- * Strictly modular inside FORGE CODE/ with zero modifications to source/ or port/.
  */
 
+#ifndef HALO_RELEASE
+#define HALO_RELEASE
+#endif
 #include "cseries.h"
 #include "halo_port_limits.h" /* HALO_PORT_NETWORK_VERSION: OpenCE's protocol for standard sessions */
 #include "game/game.h"
@@ -47,7 +49,7 @@ extern int compress2(unsigned char *dest, unsigned long *destLen, const unsigned
 #include <xtl.h>
 #include "rasterizer/xbox/rasterizer_xbox.h"
 #include "rasterizer/xbox/rasterizer_xbox_pixel_shader.h"
-#include "zlib_prefixed.h"
+#include "../../third_party/zlib/zlib_prefixed.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -185,13 +187,11 @@ static void forge_ensure_xbox_loading_tga(void)
 	int x, y, slot;
 
 	platform_translate_path("z:\\maps\\loading.tga", z_tga_host, sizeof(z_tga_host));
-#ifdef _WIN32
 	{
 		char z_maps_dir[1024];
 		platform_translate_path("z:\\maps", z_maps_dir, sizeof(z_maps_dir));
 		CreateDirectoryA(z_maps_dir, NULL);
 	}
-#endif
 
 	zf = fopen(z_tga_host, "rb");
 	if (zf)
@@ -1476,11 +1476,9 @@ static int ensure_xbox_map_decompressed_cache(
 
 	/* 3. Stream-decompress Xbox v5 map into OpenCE Forge/cached_tags/xbox_cache/<map_internal_name>.map
 	 * so each Xbox map is only decompressed once and never overwrites a single shared donor file! */
-#ifdef _WIN32
 	CreateDirectoryA("OpenCE Forge", NULL);
 	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
 	CreateDirectoryA("OpenCE Forge/cached_tags/xbox_cache", NULL);
-#endif
 	if (map_internal_name[0])
 		snprintf(out_cache_path, out_cache_sz, "OpenCE Forge/cached_tags/xbox_cache/%s.map", map_internal_name);
 	else
@@ -1719,7 +1717,6 @@ static int forge_index_xbox_map_file_to_catalog(
 
 static int forge_rip_maps_folder_to_cached_tags(char const *maps_dir)
 {
-#ifdef _WIN32
 	char pattern[512];
 	WIN32_FIND_DATAA fd;
 	HANDLE h;
@@ -1804,15 +1801,10 @@ static int forge_rip_maps_folder_to_cached_tags(char const *maps_dir)
 		fclose(credits_fp);
 	fclose(xbox_manifest_fp);
 	return (ripped_maps > 0 && total_assets > 0) ? total_assets : 0;
-#else
-	(void)maps_dir;
-	return 0;
-#endif
 }
 
 static void forge_delete_files_matching(char const *dir_path, char const *pattern)
 {
-#ifdef _WIN32
 	char search_pat[512];
 	WIN32_FIND_DATAA fd;
 	HANDLE h;
@@ -1830,10 +1822,6 @@ static void forge_delete_files_matching(char const *dir_path, char const *patter
 		}
 	} while (FindNextFileA(h, &fd));
 	CloseHandle(h);
-#else
-	(void)dir_path;
-	(void)pattern;
-#endif
 }
 
 static void close_runtime_xbox_donor(void);
@@ -1914,7 +1902,6 @@ static void forge_ensure_local_tag_cache_built(void)
 		}
 	}
 
-#ifdef _WIN32
 	CreateDirectoryA("OpenCE Forge", NULL);
 	CreateDirectoryA("OpenCE Forge/custom_tags", NULL);
 	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
@@ -1922,10 +1909,11 @@ static void forge_ensure_local_tag_cache_built(void)
 	{
 		int extracted_total = forge_rip_maps_folder_to_cached_tags("maps");
 		if (extracted_total <= 0)
-			extracted_total = forge_rip_maps_folder_to_cached_tags("FORGE CODE/GAME MAPS/XBOX MAPS");
+			extracted_total = forge_rip_maps_folder_to_cached_tags("assets/maps");
 		if (extracted_total <= 0)
-			extracted_total = forge_rip_maps_folder_to_cached_tags("../FORGE CODE/GAME MAPS/XBOX MAPS");
+			extracted_total = forge_rip_maps_folder_to_cached_tags("../assets/maps");
 
+#ifdef _WIN32
 		if (extracted_total <= 0)
 		{
 			int resp = MessageBoxA(
@@ -1947,8 +1935,8 @@ static void forge_ensure_local_tag_cache_built(void)
 				extracted_total = forge_rip_maps_folder_to_cached_tags(maps_dir);
 			}
 		}
-	}
 #endif
+	}
 }
 
 void forge_runtime_init(void)
@@ -1970,10 +1958,8 @@ void forge_runtime_init(void)
 	snprintf(g_forge.save_map_name, sizeof(g_forge.save_map_name), "forge_custom_arena");
 	g_forge.save_map_name_len = (int)strlen(g_forge.save_map_name);
 
-#ifdef _WIN32
 	CreateDirectoryA("OpenCE Forge", NULL);
 	CreateDirectoryA("OpenCE Forge/custom_tags", NULL);
-#endif
 	forge_ensure_local_tag_cache_built();
 	forge_runtime_reload_catalogs();
 }
@@ -3760,11 +3746,10 @@ static long load_native_xbox_tag_runtime(
 	char const *req_path,
 	uint32_t *out_actual_group)
 {
-#ifdef _WIN32
 	static char const *const s_xbox_map_dirs[] = {
 		"maps",
-		"FORGE CODE/GAME MAPS/XBOX MAPS",
-		"../FORGE CODE/GAME MAPS/XBOX MAPS"
+		"assets/maps",
+		"../assets/maps"
 	};
 	char candidate_stems[8][64];
 	int stem_count, s, slot, d;
@@ -3860,11 +3845,6 @@ static long load_native_xbox_tag_runtime(
 			CloseHandle(h);
 		}
 	}
-#else
-	(void)req_group;
-	(void)req_path;
-	(void)out_actual_group;
-#endif
 	return NONE;
 }
 
@@ -4453,7 +4433,6 @@ static long load_compressed_xbox_bundle_runtime(
 	char const *req_path,
 	uint32_t *out_actual_group)
 {
-#ifdef _WIN32
 	static char const *const dirs[] = {
 		"OpenCE Forge/custom_tags",
 		"custom_tags"
@@ -4485,11 +4464,6 @@ static long load_compressed_xbox_bundle_runtime(
 		} while (FindNextFileA(h, &fd));
 		CloseHandle(h);
 	}
-#else
-	(void)req_group;
-	(void)req_path;
-	(void)out_actual_group;
-#endif
 	return NONE;
 }
 
@@ -6245,7 +6219,6 @@ static long load_native_ocetags_package_runtime(
 	char const *req_path,
 	uint32_t *out_actual_group)
 {
-#ifdef _WIN32
 	static char const *const s_ocetags_dirs[] = {
 		"OpenCE Forge/custom_tags",
 		"custom_tags",
@@ -6323,11 +6296,6 @@ static long load_native_ocetags_package_runtime(
 			CloseHandle(h);
 		}
 	}
-#else
-	(void)req_group;
-	(void)req_path;
-	(void)out_actual_group;
-#endif
 	return NONE;
 }
 
@@ -6484,7 +6452,6 @@ static int forge_rip_ocetags_file_to_cached_tags(
 static int forge_scan_and_rip_ocetags_folders(int force_reload)
 {
 	int extracted = 0;
-#ifdef _WIN32
 	static char const *const s_ocetags_dirs[] = {
 		"OpenCE Forge/custom_tags",
 		"custom_tags"
@@ -6541,9 +6508,6 @@ static int forge_scan_and_rip_ocetags_folders(int force_reload)
 		fclose(credits_fp);
 	if (manifest_fp)
 		fclose(manifest_fp);
-#else
-	(void)force_reload;
-#endif
 	return extracted;
 }
 
@@ -6717,9 +6681,7 @@ int forge_ui_save_copy_as(char const *new_map_name)
 
 	resolve_current_base_map_path(base_map_path, sizeof(base_map_path));
 
-#ifdef _WIN32
 	CreateDirectoryA("custom_maps", NULL);
-#endif
 
 	ok = forge_export_scenario_map(
 		base_map_path,
@@ -8238,8 +8200,8 @@ static int open_preview_xbox_donor_for_tag(uint32_t req_group, char const *req_p
 	static char const *const map_dirs[] = {
 		"maps",
 		"custom_maps",
-		"FORGE CODE/GAME MAPS/XBOX MAPS",
-		"../FORGE CODE/GAME MAPS/XBOX MAPS"
+		"assets/maps",
+		"../assets/maps"
 	};
 
 	if (s_preview_xbox_donor.fp && s_preview_xbox_donor.tag_buf)
@@ -8285,9 +8247,7 @@ static int open_preview_xbox_donor_for_tag(uint32_t req_group, char const *req_p
 			if (!is_xbox_version5_map_file(cand))
 				continue;
 			snprintf(decomp, sizeof(decomp), "OpenCE Forge/cached_tags/xbox_cache/%s.map", stems[s]);
-#ifdef _WIN32
 			CreateDirectoryA("OpenCE Forge/cached_tags/xbox_cache", NULL);
-#endif
 			if (!ensure_xbox_map_decompressed_cache(cand, decomp, sizeof(decomp)))
 				continue;
 			f = fopen(decomp, "rb");
@@ -8535,11 +8495,9 @@ int forge_ui_open_map_for_tag_browser(char const *map_path)
 		int32_t tag_count, i;
 		uint8_t *tbuf;
 
-#ifdef _WIN32
 		CreateDirectoryA("OpenCE Forge", NULL);
 		CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
 		CreateDirectoryA("OpenCE Forge/cached_tags/xbox_cache", NULL);
-#endif
 		snprintf(decomp_path, sizeof(decomp_path), "OpenCE Forge/cached_tags/xbox_cache/%s.map", s_map_browser.map_name);
 		if (!ensure_xbox_map_decompressed_cache(map_path, decomp_path, sizeof(decomp_path)))
 			return 0;
@@ -8999,10 +8957,8 @@ static void upsert_custom_catalog_manifest_line(
 		snprintf(lines[line_count++], sizeof(lines[0]), "%s|%d|2|%s|%s",
 			grp_str, (int)cat_id, tag_path, custom_name);
 	}
-#ifdef _WIN32
 	CreateDirectoryA("OpenCE Forge", NULL);
 	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
-#endif
 	out_fp = fopen("OpenCE Forge/cached_tags/custom_catalog.txt", "wb");
 	if (out_fp)
 	{
@@ -9298,10 +9254,8 @@ static int extract_compressed_xbox_map_tag(
 	}
 	safe_file[w_idx] = '\0';
 
-#ifdef _WIN32
 	CreateDirectoryA("OpenCE Forge", NULL);
 	CreateDirectoryA("OpenCE Forge/custom_tags", NULL);
-#endif
 	snprintf(fxtg_path, sizeof(fxtg_path), "OpenCE Forge/custom_tags/%s_%08X.fxtg", safe_file, (unsigned int)grp);
 	memset(&fhdr, 0, sizeof(fhdr));
 	fhdr.magic = 0x31545846u; /* 'FXT1' */
@@ -9792,8 +9746,8 @@ int forge_cache_active_map_tag(uint32_t group_tag, char const *tag_path)
 		static char const *const s_dirs[] = {
 			"maps",
 			"custom_maps",
-			"FORGE CODE/GAME MAPS/XBOX MAPS",
-			"../FORGE CODE/GAME MAPS/XBOX MAPS"
+			"assets/maps",
+			"../assets/maps"
 		};
 		int d, found_map = 0, ok = 0;
 
@@ -9896,7 +9850,6 @@ int forge_ui_installed_tag_count(int category_tab)
 
 static int find_fxtg_file_for_tag(uint32_t grp, char const *tag_path, char *out_file, size_t out_sz, uint32_t *out_disk_bytes)
 {
-#ifdef _WIN32
 	static char const *const dirs[] = {
 		"OpenCE Forge/custom_tags",
 		"custom_tags"
@@ -9941,13 +9894,6 @@ static int find_fxtg_file_for_tag(uint32_t grp, char const *tag_path, char *out_
 		} while (FindNextFileA(h, &fd));
 		CloseHandle(h);
 	}
-#else
-	(void)grp;
-	(void)tag_path;
-	(void)out_file;
-	(void)out_sz;
-	(void)out_disk_bytes;
-#endif
 	return 0;
 }
 
@@ -11617,4 +11563,3 @@ void forge_normalize_mcc_hud_tags(void)
 		}
 	}
 }
-

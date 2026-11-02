@@ -35,6 +35,7 @@ where its offset falls in their combined offset space.
 
 #include <stdlib.h>
 #include <xtl.h>
+#include "forge_ce_io_redirect.h"
 
 /* ---------- constants */
 

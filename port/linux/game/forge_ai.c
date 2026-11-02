@@ -1,18 +1,20 @@
 /*
- * OpenCE Forge ("HaloCE Forge.exe")
+ * OpenCE : Forge
  * Interactive In-Engine AI Placement System (source/ai/ integration).
  * Spawns native Halo: Combat Evolved NPC actors & bipeds (Marines, Elites,
  * Grunts, Jackals, Hunters, Flood, Sentinels) assigned to Friendly or Enemy
  * combat teams.
- * Strictly modular inside FORGE CODE/ with zero modifications to source/ or port/.
  */
 
+#ifndef HALO_RELEASE
+#define HALO_RELEASE
+#endif
 #include "cseries.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
+#include "math/real_math.h"
 #include "game/game.h"
 #include "game/game_allegiance.h"
 #include "tag_files/tag_groups.h"

@@ -2,7 +2,7 @@
 
 # OpenCE : Forge
 
-**Halo: Combat Evolved for Windows & Linux — Full [OpenCE](https://github.com/OpenCommunityEdition/OpenCE) Port with Integrated 3D Forge Mode**
+**Halo: Combat Evolved for Windows, Linux, Android & Web — Full [OpenCE](https://github.com/OpenCommunityEdition/OpenCE) Port with Integrated 3D Forge Mode**
 
 <p align="center">
   <img src="port/assets/icon/opence-icon.png" alt="OpenCE" width="128">
@@ -141,6 +141,6 @@ ninja windows
 
 ## Licence & Credits
 
-- **OpenCE : Forge** is developed by **SutlabSol** on top of [OpenCommunityEdition/OpenCE](https://github.com/OpenCommunityEdition/OpenCE) ([bnunu/halo-1](https://github.com/bnunu/halo-1) / [punpckhdq/halo](https://github.com/punpckhdq/halo)).
+- **OpenCE : Forge** is developed by **Mota-Lev** on top of [OpenCommunityEdition/OpenCE](https://github.com/OpenCommunityEdition/OpenCE) ([bnunu/halo-1](https://github.com/bnunu/halo-1) / [punpckhdq/halo](https://github.com/punpckhdq/halo)).
 - High-resolution HUD and menu art redraws are credited in [AUTHORS.md](AUTHORS.md).
 - Licensed under the [GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`)](LICENSE).

@@ -2486,7 +2486,7 @@ static boolean menus_language_maps(void)
 	return FALSE;
 }
 
-void menu_tags_loaded(
+void orig_menu_tags_loaded(
 	char const *map_name)
 {
 	struct halo_menus const *menus;
@@ -2649,7 +2649,7 @@ done:
 	memset(&build, 0, sizeof(build));
 }
 
-void menu_tags_unloaded(
+void orig_menu_tags_unloaded(
 	void)
 {
 	if (menu_tags.loaded || menu_tags.block_count)

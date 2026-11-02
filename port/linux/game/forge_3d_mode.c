@@ -1,5 +1,5 @@
 /*
- * OpenCE : Forge ("halo.exe")
+ * OpenCE : Forge
  * Mode 2: 3D In-Engine Mode (Single-Player & Online Multiplayer / Co-op)
  * - 6DOF 343 Guilty Spark Monitor flight with native Mouse Look
  * - 3rd-Person Monitor View toggle (F4 or console `third_person`)
@@ -7,15 +7,17 @@
  * - Halo 3-Style Left-Aligned Compact Forge Menu & Object Properties using small terminal font
  * - Interactive AI Unit Placement (Friendly vs. Enemy)
  * - "Inject Custom Tags" UI Modal & "Save Copy As..." Standalone Map Export Modal
- * Strictly modular inside FORGE CODE/ with zero modifications to source/ or port/.
  */
 
+#ifndef HALO_RELEASE
+#define HALO_RELEASE
+#endif
 #include "cseries.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
+#include "math/real_math.h"
 #include "game/game.h"
 #include "game/game_engine.h"
 #include "game/players.h"
@@ -48,8 +50,8 @@
 #include "forge_engine.h"
 
 extern unsigned long system_milliseconds(void);
-extern void halo_linux_mouse_look(short controller_index, float *yaw_delta, float *pitch_delta);
-extern int platform_scoreboard_scroll(int active, int *wheel_notches, float *touch_dy);
+extern int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch);
+extern void platform_scoreboard_scroll(int open, long *notches, long *pages);
 extern boolean render_camera_world_to_screen(
 	const struct render_camera *camera,
 	const struct render_frustum *frustum,
@@ -69,6 +71,8 @@ extern forge_sdl_gamepad *SDL_GetGamepadFromID(forge_sdl_joystick_id instance_id
 extern unsigned char SDL_GetGamepadButton(forge_sdl_gamepad *gamepad, int button);
 extern int16_t SDL_GetGamepadAxis(forge_sdl_gamepad *gamepad, int axis);
 extern void SDL_free(void *mem);
+extern tag tag_get_group_tag(long tag_index);
+
 
 struct forge_font_char_metric
 {
@@ -5830,7 +5834,7 @@ void forge_3d_update(float dt)
 		if (g_forge.grabbed_live_index >= 0 && g_forge.grabbed_live_index < g_forge.live_instance_count)
 		{
 			float tx, ty, tz, syaw, spitch, sroll;
-			int wheel_notches = 0;
+			long wheel_notches = 0;
 			int radius_mod_held = ((GetAsyncKeyState('C') & 0x8000) || (GetAsyncKeyState(VK_SHIFT) & 0x8000)) != 0;
 
 			/* Scroll wheel moves held item away/towards camera, OR scales KOTH Hill radius */
@@ -6761,6 +6765,3 @@ void forge_3d_draw_hud(
 
 	set_forge_hud_ui_scale(1.0f, 0.0f, 0.0f);
 }
-
-
-

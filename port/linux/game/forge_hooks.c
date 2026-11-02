@@ -1,9 +1,11 @@
 /*
- * OpenCE : Forge ("halo.exe")
- * Engine Symbol Bridge Hooks (linked via llvm-objcopy --redefine-sym).
- * Strictly modular inside FORGE CODE/ with zero modifications to source/ or port/.
+ * OpenCE : Forge
+ * Engine Symbol Bridge Hooks.
  */
 
+#ifndef HALO_RELEASE
+#define HALO_RELEASE
+#endif
 #include "cseries.h"
 #include "game/game.h"
 #include "game/players.h"
@@ -61,7 +63,7 @@ extern void dispose_global_network_game_server(void);
 extern void network_game_accept_remote_connections(boolean accept);
 extern boolean network_game_is_active(void);
 extern long player_ui_get_active_player_profile_index(short local_player_index);
-extern boolean player_ui_get_active_player_profile(short local_player_index, struct player_profile *profile);
+extern void player_ui_get_active_player_profile(short local_player_index, struct player_profile *profile);
 extern void player_ui_set_active_player_profile(short local_player_index, long profile_index, struct player_profile const *profile);
 extern void player_ui_set_single_player_local_player_controller(short local_player_index, short controller_index);
 extern void player_ui_remember_player1_profile(boolean remember);
@@ -84,7 +86,7 @@ static short s_forge_only_ce_indices[4096];
 static short s_forge_only_ce_count = 0;
 static long s_save_forge_btn_tag = NONE;
 
-/* Original engine symbols redefined via llvm-objcopy in FORGE CODE/build/wrapped_obj/ */
+/* Original engine symbols wrapped by Forge hooks */
 extern void orig_network_chat_update(void);
 extern void orig_network_chat_draw(short local_player_index);
 extern boolean orig_network_chat_typing(void);
@@ -243,7 +245,13 @@ static struct
 	char map_leaves[FORGE_MAX_EDIT_MAPS][64];
 } s_forge_menu;
 
+#ifdef HALO_WINDOWS
 extern FILE *halo_windows_fopen(char const *filename, char const *mode);
+#define forge_platform_fopen halo_windows_fopen
+#else
+extern FILE *halo_linux_fopen(char const *filename, char const *mode);
+#define forge_platform_fopen halo_linux_fopen
+#endif
 
 static FILE *forge_open_data_file_rb(char const *rel_path)
 {
@@ -256,9 +264,9 @@ static FILE *forge_open_data_file_rb(char const *rel_path)
 	if (f)
 		return f;
 	if (_strnicmp(rel_path, "d:\\", 3) == 0 || _strnicmp(rel_path, "d:/", 3) == 0)
-		return halo_windows_fopen(rel_path, "rb");
+		return forge_platform_fopen(rel_path, "rb");
 	snprintf(d_path, sizeof(d_path), "d:\\%s", rel_path);
-	return halo_windows_fopen(d_path, "rb");
+	return forge_platform_fopen(d_path, "rb");
 }
 
 static int is_leaf_named_forge_suffix(char const *leaf_no_ext)
@@ -1349,7 +1357,7 @@ static void update_forge_name_tag_dialog(struct forge_widget_instance *bar)
 	int vk;
 	int shift_down;
 	size_t len;
-	unsigned long now_ms = GetTickCount();
+	unsigned long now_ms = system_milliseconds();
 
 	while (screen && screen->parent)
 		screen = screen->parent;
@@ -1796,7 +1804,7 @@ boolean pc_menu_event_function_invoke(
 				snprintf(s_tag_browser.custom_name, sizeof(s_tag_browser.custom_name), "%.14s", short_name);
 				s_tag_browser.name_box_active = 0;
 				s_tag_browser.dialog_open = 1;
-				s_tag_browser.last_dialog_ms = GetTickCount();
+				s_tag_browser.last_dialog_ms = system_milliseconds();
 				s_tag_browser.bs_next_ms = 0;
 				for (vk = 1; vk < 254; vk++)
 					s_tag_browser.prev_vk[vk] = (forge_key_state(vk) & 0x8000) != 0;
@@ -1909,7 +1917,7 @@ boolean pc_menu_event_function_invoke(
 		int vk;
 		s_tag_browser.name_box_active = 1;
 		s_tag_browser.dialog_open = 1;
-		s_tag_browser.last_dialog_ms = GetTickCount();
+		s_tag_browser.last_dialog_ms = system_milliseconds();
 		for (vk = 0; vk < 256; vk++)
 			s_tag_browser.prev_vk[vk] = (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
 		ui_play_audio_feedback_sound(2);
@@ -3347,7 +3355,6 @@ void menu_tags_loaded(char const *map_name)
 /* ---------- Point 11: Redirect custom_maps\<name>.(map|bmp|txt) to forge_maps\<name>\<name>.(map|bmp|txt) */
 
 extern void *file_reference_create_from_path(void *reference, char const *full_path, boolean is_directory);
-extern FILE *halo_windows_fopen(char const *filename, char const *mode);
 
 static char const *resolve_forge_maps_redirect_path(char const *path, char *out_buf, size_t out_sz)
 {
@@ -3561,7 +3568,7 @@ FILE *forge_ce_fopen(char const *filename, char const *mode)
 {
 	char redirected[512];
 	char const *actual = resolve_forge_maps_redirect_path(filename, redirected, sizeof(redirected));
-	FILE *fp = halo_windows_fopen(actual, mode);
+	FILE *fp = forge_platform_fopen(actual, mode);
 	if (!fp)
 		fp = try_open_embedded_map_sidecar(filename);
 	return fp;
@@ -3790,73 +3797,20 @@ struct forge_sdl_keystroke
 	BYTE flags;
 };
 
-extern BOOL orig_platform_ui_pointer_read(struct forge_sdl_ui_pointer *pointer);
 extern void orig_platform_input_read(struct forge_sdl_input_state *state, BOOL consume_motion);
-extern BOOL orig_platform_next_keystroke(struct forge_sdl_keystroke *keystroke);
-extern DWORD WINAPI orig_XInputGetState(HANDLE hDevice, PXINPUT_STATE pState);
-
-#ifdef _WIN32
-__declspec(dllimport) void *WINAPI GetForegroundWindow(void);
-__declspec(dllimport) DWORD WINAPI GetWindowThreadProcessId(void *hWnd, LPDWORD lpdwProcessId);
-__declspec(dllimport) DWORD WINAPI GetCurrentProcessId(void);
-#endif
+extern int platform_window_is_focused(void);
+extern short platform_vk_key_down(int vk);
 
 int forge_window_is_focused(void)
 {
-#ifdef _WIN32
-	static unsigned long s_last_check_ms = 0;
-	static int s_cached_focused = 1;
-	static DWORD s_self_pid = 0;
-	unsigned long now_ms = system_milliseconds();
-	void *fg;
-	DWORD fg_pid = 0;
-
-	if (now_ms != 0 && (now_ms - s_last_check_ms) < 16UL)
-		return s_cached_focused;
-	s_last_check_ms = now_ms;
-
-	if (s_self_pid == 0)
-		s_self_pid = GetCurrentProcessId();
-	fg = GetForegroundWindow();
-	if (!fg)
-	{
-		s_cached_focused = 0;
-		return 0;
-	}
-	GetWindowThreadProcessId(fg, &fg_pid);
-	s_cached_focused = (fg_pid == s_self_pid) ? 1 : 0;
-	return s_cached_focused;
-#else
-	return 1;
-#endif
+	return platform_window_is_focused();
 }
-
-#undef GetAsyncKeyState
-__declspec(dllimport) SHORT WINAPI GetAsyncKeyState(int vKey);
 
 short forge_key_state(int vk)
 {
 	if (!forge_window_is_focused())
 		return 0;
-	return GetAsyncKeyState(vk);
-}
-
-BOOL platform_ui_pointer_read(struct forge_sdl_ui_pointer *pointer)
-{
-	BOOL active = orig_platform_ui_pointer_read(pointer);
-	if (!forge_window_is_focused())
-	{
-		if (pointer)
-		{
-			pointer->moved = FALSE;
-			pointer->left_clicks = 0;
-			pointer->right_clicks = 0;
-			pointer->wheel_steps = 0;
-			pointer->downs = 0;
-		}
-		return FALSE;
-	}
-	return active;
+	return platform_vk_key_down(vk);
 }
 
 void platform_input_read(struct forge_sdl_input_state *state, BOOL consume_motion)
@@ -3864,19 +3818,9 @@ void platform_input_read(struct forge_sdl_input_state *state, BOOL consume_motio
 	static int s_esc_suppressed_until_up = 0;
 
 	orig_platform_input_read(state, consume_motion);
-	if (state && (!forge_window_is_focused() || !state->focused))
+	if (state && s_tag_browser.dialog_open)
 	{
-		memset(state->keys, 0, sizeof(state->keys));
-		memset(state->mouse_buttons, 0, sizeof(state->mouse_buttons));
-		state->mouse_dx = 0.0f;
-		state->mouse_dy = 0.0f;
-		state->mouse_wheel = 0.0f;
-		state->focused = FALSE;
-		s_esc_suppressed_until_up = 0;
-	}
-	else if (state && s_tag_browser.dialog_open)
-	{
-		if ((GetTickCount() - s_tag_browser.last_dialog_ms) < 250UL)
+		if ((system_milliseconds() - s_tag_browser.last_dialog_ms) < 250UL)
 		{
 			memset(state->keys, 0, sizeof(state->keys));
 		}
@@ -3908,68 +3852,42 @@ void platform_input_read(struct forge_sdl_input_state *state, BOOL consume_motio
 	}
 }
 
-BOOL platform_next_keystroke(struct forge_sdl_keystroke *keystroke)
-{
-	if (!forge_window_is_focused())
-	{
-		struct forge_sdl_keystroke dummy;
-		while (orig_platform_next_keystroke(&dummy))
-		{
-		}
-		return FALSE;
-	}
-	return orig_platform_next_keystroke(keystroke);
-}
-
-DWORD WINAPI XInputGetState(HANDLE hDevice, PXINPUT_STATE pState)
-{
-	DWORD rc = orig_XInputGetState(hDevice, pState);
-	if (!forge_window_is_focused() && pState)
-	{
-		memset(&pState->Gamepad, 0, sizeof(pState->Gamepad));
-	}
-	return rc;
-}
-
 /* ---------- Server Browser & LAN Browser 'FORGE' Gamemode Display & Cross-Version Compatibility */
 
-extern byte orig_game_modes_kind(struct game_variant const *variant, struct game_variant_options const *options);
-extern wchar_t const *orig_game_modes_kind_name(long game_engine_index, byte kind, boolean abbreviated);
-extern wchar_t const *orig_game_modes_variant_kind_name(struct game_variant const *variant, struct game_variant_options const *options);
-extern int orig_p2p_lobby_games(struct p2p_listing *games, int maximum_count);
-extern byte orig_network_game_client_advertised_game_kind(struct network_game_client *client, struct network_advertised_game const *game);
-extern boolean orig_network_game_client_advertised_game_compatible(struct network_game_client *client, struct network_advertised_game const *game, boolean tell);
+extern byte game_modes_kind(struct game_variant const *variant, struct game_variant_options const *options);
+extern wchar_t const *game_modes_kind_name(long game_engine_index, byte kind, boolean abbreviated);
+extern wchar_t const *game_modes_variant_kind_name(struct game_variant const *variant, struct game_variant_options const *options);
 
-byte game_modes_kind(struct game_variant const *variant, struct game_variant_options const *options)
+byte forge_game_modes_kind(struct game_variant const *variant, struct game_variant_options const *options)
 {
 	if (g_forge_session_enabled ||
 		(variant && _wcsicmp(variant->human_readable_game_description, L"Forge") == 0))
 	{
 		return FORGE_GAME_KIND;
 	}
-	return orig_game_modes_kind(variant, options);
+	return game_modes_kind(variant, options);
 }
 
-wchar_t const *game_modes_kind_name(long game_engine_index, byte kind, boolean abbreviated)
+wchar_t const *forge_game_modes_kind_name(long game_engine_index, byte kind, boolean abbreviated)
 {
 	if ((kind & ~0x80) == FORGE_GAME_KIND)
 		return L"FORGE";
-	return orig_game_modes_kind_name(game_engine_index, kind, abbreviated);
+	return game_modes_kind_name(game_engine_index, kind, abbreviated);
 }
 
-wchar_t const *game_modes_variant_kind_name(struct game_variant const *variant, struct game_variant_options const *options)
+wchar_t const *forge_game_modes_variant_kind_name(struct game_variant const *variant, struct game_variant_options const *options)
 {
 	if (g_forge_session_enabled ||
 		(variant && _wcsicmp(variant->human_readable_game_description, L"Forge") == 0))
 	{
 		return L"FORGE";
 	}
-	return orig_game_modes_variant_kind_name(variant, options);
+	return game_modes_variant_kind_name(variant, options);
 }
 
-int p2p_lobby_games(struct p2p_listing *games, int maximum_count)
+int forge_p2p_lobby_games(struct p2p_listing *games, int maximum_count)
 {
-	int count = orig_p2p_lobby_games(games, maximum_count);
+	int count = p2p_lobby_games(games, maximum_count);
 	int i;
 
 	if (games)
@@ -3992,6 +3910,14 @@ int p2p_lobby_games(struct p2p_listing *games, int maximum_count)
 	}
 	return count;
 }
+
+extern byte orig_network_game_client_advertised_game_kind(
+	struct network_game_client *client,
+	struct network_advertised_game const *game);
+extern boolean orig_network_game_client_advertised_game_compatible(
+	struct network_game_client *client,
+	struct network_advertised_game const *game,
+	boolean tell);
 
 int forge_p2p_join_listing(const struct p2p_listing *listing)
 {
@@ -4190,4 +4116,3 @@ void hud_draw_numbers(
 		flash_reference_time,
 		override_scale);
 }
-

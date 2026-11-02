@@ -82,6 +82,8 @@ game with a password is not: its token is sealed.
 enum
 {
 	LISTING_FORMAT = 1,
+	FORGE_LOBBY_NETWORK_VERSION = 0x4628,
+	FORGE_LOBBY_GAME_KIND = 0x46,
 	_listing_open = 1,
 	_listing_in_progress = 2,
 	_listing_has_teams = 4,
@@ -309,6 +311,8 @@ static int listing_make_token(unsigned char *bytes, int flags, const unsigned ch
 {
 	unsigned char *signed_part = bytes;
 	unsigned char data[sizeof(signature_label) - 1 + MAXIMUM_LISTING_SIZE];
+	int listing_version = (lobby.kind & ~0x80) == FORGE_LOBBY_GAME_KIND ?
+		FORGE_LOBBY_NETWORK_VERSION : HALO_PORT_NETWORK_VERSION;
 	int size = 0;
 
 	if (lobby.has_password && !(flags & _listing_closed))
@@ -318,8 +322,8 @@ static int listing_make_token(unsigned char *bytes, int flags, const unsigned ch
 	bytes[size++] = 'H';
 	bytes[size++] = 'L';
 	bytes[size++] = LISTING_FORMAT;
-	bytes[size++] = (unsigned char)(HALO_PORT_NETWORK_VERSION >> 8);
-	bytes[size++] = (unsigned char)HALO_PORT_NETWORK_VERSION;
+	bytes[size++] = (unsigned char)(listing_version >> 8);
+	bytes[size++] = (unsigned char)listing_version;
 	bytes[size++] = (unsigned char)flags;
 	put_long(bytes + size, ++lobby.sequence);
 	size += 4;
@@ -425,19 +429,6 @@ static int listing_read(const unsigned char *bytes, int size, struct listing *li
 	if (offset + P2P_SIGNATURE_SIZE != size)
 		return 0;
 	listing->signed_size = offset;
-#ifdef FORGE_NET_OVERRIDE_H
-	if (listing->version == FORGE_NETWORK_VERSION ||
-		listing->kind == FORGE_GAME_KIND ||
-		(listing->gametype[0] && _stricmp(listing->gametype, "Forge") == 0))
-	{
-		listing->kind = FORGE_GAME_KIND;
-	}
-	if (listing->version == FORGE_NETWORK_VERSION ||
-		listing->version == HALO_PORT_NETWORK_VERSION_STOCK)
-	{
-		listing->version = (int)HALO_PORT_NETWORK_VERSION;
-	}
-#endif
 	return 1;
 }
 
@@ -820,6 +811,12 @@ static int listing_wanted(const unsigned char *payload, int size, int retained, 
 
 	if (!listing_read(payload, size, &listing))
 		return 0;
+	if (listing.version == FORGE_LOBBY_NETWORK_VERSION ||
+		(listing.kind & ~0x80) == FORGE_LOBBY_GAME_KIND)
+	{
+		listing.kind = FORGE_LOBBY_GAME_KIND;
+		listing.version = HALO_PORT_NETWORK_VERSION;
+	}
 	if (listing.version != HALO_PORT_NETWORK_VERSION)
 	{
 		if (listing.version > HALO_PORT_NETWORK_VERSION && !(listing.flags & _listing_closed))
@@ -851,7 +848,15 @@ static void update_browsing(void)
 		/* (listing_wanted let it in; its key and its time are checked
 		again here, where its signature is: the time it was queued at may
 		have run out) */
-		if (!listing_read(queued.payload, queued.size, &listing) || listing.version != HALO_PORT_NETWORK_VERSION ||
+		if (!listing_read(queued.payload, queued.size, &listing))
+			continue;
+		if (listing.version == FORGE_LOBBY_NETWORK_VERSION ||
+			(listing.kind & ~0x80) == FORGE_LOBBY_GAME_KIND)
+		{
+			listing.kind = FORGE_LOBBY_GAME_KIND;
+			listing.version = HALO_PORT_NETWORK_VERSION;
+		}
+		if (listing.version != HALO_PORT_NETWORK_VERSION ||
 			!signing_key_hash(listing.key, key_hash) || memcmp(key_hash, queued.key_hash, P2P_KEY_HASH_SIZE) ||
 			!listing_current(&listing, queued.retained))
 		{
@@ -1092,6 +1097,8 @@ void p2p_set_game_listing(const char *name, const char *map, const char *gametyp
 	sanitize(new_map, P2P_LISTING_MAP_SIZE, map ? map : lobby.map, P2P_LISTING_MAP_SIZE);
 	sanitize(new_gametype, P2P_LISTING_GAMETYPE_SIZE, gametype ? gametype : lobby.gametype,
 		P2P_LISTING_GAMETYPE_SIZE);
+	if (!strcmp(new_gametype, "Forge") || !strcmp(new_gametype, "FORGE") || !strcmp(new_gametype, "forge"))
+		kind = FORGE_LOBBY_GAME_KIND;
 	/* (only the game's server writes these: unchanged, it need not wait for
 	the lock) */
 	if (!strcmp(new_name, lobby.name) && !strcmp(new_map, lobby.map) && !strcmp(new_gametype, lobby.gametype) &&

@@ -25,6 +25,9 @@ did not walk, and neither can this: such a tag is not bundled
 
 /* ---------- headers */
 
+#ifndef HALO_RELEASE
+#define HALO_RELEASE
+#endif
 #include "cseries.h"
 #include "tag_schema.h"
 #include "tag_bundle.h"

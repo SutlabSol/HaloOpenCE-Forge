@@ -136,6 +136,31 @@ short main_get_solo_level_from_name(char const *name);
 boolean player_name_clean(wchar_t *name, long count);
 short players_port_local_player_count(void);
 
+#include "forge_net_override.h"
+short forge_menu_custom_edition_maps_count(boolean campaign);
+short forge_menu_custom_edition_maps_display_index_of(boolean campaign, short display_position);
+void forge_menu_custom_edition_maps_look_again(void);
+short forge_menu_multiplayer_maps(char const *const **names, short *last_used);
+boolean forge_menu_multiplayer_map_choose(short level_index);
+boolean forge_player_profile_get(long index, struct player_profile *profile);
+struct p2p_listing;
+int forge_p2p_join_listing(struct p2p_listing const *listing);
+int forge_p2p_lobby_games(struct p2p_listing *games, int maximum_count);
+wchar_t const *forge_game_modes_kind_name(long game_engine_index, byte kind, boolean abbreviated);
+wchar_t const *forge_game_modes_variant_kind_name(struct game_variant const *variant, struct game_variant_options const *options);
+#define game_modes_kind_name forge_game_modes_kind_name
+#define game_modes_variant_kind_name forge_game_modes_variant_kind_name
+#define custom_edition_maps_count forge_menu_custom_edition_maps_count
+#define custom_edition_maps_display_index_of forge_menu_custom_edition_maps_display_index_of
+#define custom_edition_maps_look_again forge_menu_custom_edition_maps_look_again
+#define ui_widget_port_multiplayer_maps forge_menu_multiplayer_maps
+#define ui_widget_port_multiplayer_map_choose forge_menu_multiplayer_map_choose
+#define player_profile_get forge_player_profile_get
+#define p2p_join_listing forge_p2p_join_listing
+#define p2p_lobby_games forge_p2p_lobby_games
+#define pc_menu_event_function_invoke orig_pc_menu_event_function_invoke
+#define pc_menu_game_data_function_invoke orig_pc_menu_game_data_function_invoke
+
 boolean pc_menu_event_function_invoke(struct widget_instance *widget, struct event_record *event,
 	long function_index, boolean *widget_deleted);
 void pc_menu_game_data_function_invoke(struct widget_instance *widget, long function);

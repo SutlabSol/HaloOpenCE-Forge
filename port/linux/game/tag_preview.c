@@ -5,8 +5,11 @@
  * and rim lighting as they turn.
  */
 
+#ifndef HALO_RELEASE
+#define HALO_RELEASE
+#endif
 #include "cseries.h"
-#include <math.h>
+#include "math/real_math.h"
 #include <stdlib.h>
 #include <string.h>
 

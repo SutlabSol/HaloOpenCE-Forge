@@ -1,7 +1,6 @@
 /*
- * OpenCE : Forge ("halo.exe")
+ * OpenCE : Forge
  * Runtime Engine Header - Shared across all Forge runtime modules.
- * Strictly modular inside FORGE CODE/ with zero modifications to source/ or port/.
  */
 
 #ifndef FORGE_ENGINE_H
@@ -14,12 +13,16 @@
 extern "C" {
 #endif
 
-/* ---------- Forge Release Version & Network Protocol Isolation (v1.1.1, 0x4628) */
+/* ---------- Forge Release Version & Network Protocol Isolation (v2.3.0, 0x4628) */
 
-#define FORGE_VERSION_STRING "2.2.10"
+#include "halo_port_limits.h"
+
+#define FORGE_VERSION_STRING "2.3.0"
 #define FORGE_NETWORK_VERSION 0x4628
 #define FORGE_GAME_KIND 0x46
-#define HALO_PORT_NETWORK_VERSION_STOCK 25
+#ifndef HALO_PORT_NETWORK_VERSION_STOCK
+#define HALO_PORT_NETWORK_VERSION_STOCK HALO_PORT_NETWORK_VERSION
+#endif
 /* Standard (non-Forge) sessions use OpenCE's own HALO_PORT_NETWORK_VERSION
  * (port/linux/include/halo_port_limits.h), read in forge_get_network_version(),
  * so an upstream protocol bump never leaves Forge unable to join stock games. */
@@ -30,10 +33,18 @@ long forge_get_network_version(void);
 /* Engine function (source/main/main.h) used by several Forge modules */
 char *main_get_map_name(void);
 
-#ifdef _WIN32
-__declspec(dllimport) short __stdcall GetAsyncKeyState(int vKey);
-#else
-static inline short GetAsyncKeyState(int vKey) { (void)vKey; return 0; }
+#ifndef _WIN32
+extern int strcasecmp(char const *a, char const *b);
+extern int strncasecmp(char const *a, char const *b, size_t n);
+#ifndef _stricmp
+#define _stricmp strcasecmp
+#endif
+#ifndef _strnicmp
+#define _strnicmp strncasecmp
+#endif
+#ifndef _wcsicmp
+#define _wcsicmp(a, b) ustricmp((wchar_t const *)(a), (wchar_t const *)(b))
+#endif
 #endif
 
 #ifndef VK_LBUTTON
@@ -379,10 +390,8 @@ int forge_is_mcc_hud_active(void);
 int forge_window_is_focused(void);
 short forge_key_state(int vk);
 
-#ifdef _WIN32
 #undef GetAsyncKeyState
 #define GetAsyncKeyState(vk) forge_key_state(vk)
-#endif
 
 #ifdef __cplusplus
 }

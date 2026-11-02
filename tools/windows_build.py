@@ -33,128 +33,8 @@ from .windows_cross_build import cross_toolchain_prefix
 
 LINUX_DIR = Path("port/linux")
 PORT_DIR = Path("port/windows")
-FORGE_DIR = Path("FORGE CODE")
 PORT_CONFIG = PORT_DIR / "port.json"
 BUILD = Path("build/windows")
-
-FORGE_OBJCOPY_REDEFINES: Dict[str, List[str]] = {
-    "port/linux/game/menu_functions.c": [
-        "--redefine-sym", "_pc_menu_event_function_invoke=_orig_pc_menu_event_function_invoke",
-        "--redefine-sym", "_pc_menu_game_data_function_invoke=_orig_pc_menu_game_data_function_invoke",
-        "--redefine-sym", "_custom_edition_maps_count=_forge_menu_custom_edition_maps_count",
-        "--redefine-sym", "_custom_edition_maps_display_index_of=_forge_menu_custom_edition_maps_display_index_of",
-        "--redefine-sym", "_custom_edition_maps_look_again=_forge_menu_custom_edition_maps_look_again",
-        "--redefine-sym", "_ui_widget_port_multiplayer_maps=_forge_menu_multiplayer_maps",
-        "--redefine-sym", "_ui_widget_port_multiplayer_map_choose=_forge_menu_multiplayer_map_choose",
-        "--redefine-sym", "_player_profile_get=_forge_player_profile_get",
-        "--redefine-sym", "_p2p_join_listing=_forge_p2p_join_listing",
-    ],
-    "port/linux/src/p2p_lobby.c": [
-        "--redefine-sym", "_p2p_lobby_games=_orig_p2p_lobby_games",
-    ],
-    "port/linux/game/game_modes.c": [
-        "--redefine-sym", "_game_modes_kind=_orig_game_modes_kind",
-        "--redefine-sym", "_game_modes_kind_name=_orig_game_modes_kind_name",
-        "--redefine-sym", "_game_modes_variant_kind_name=_orig_game_modes_variant_kind_name",
-    ],
-    "source/networking/network_client_manager.c": [
-        "--redefine-sym", "_network_game_client_advertised_game_compatible=_orig_network_game_client_advertised_game_compatible",
-        "--redefine-sym", "_network_game_client_advertised_game_kind=_orig_network_game_client_advertised_game_kind",
-    ],
-    "port/linux/game/network_chat.c": [
-        "--redefine-sym", "_network_chat_update=_orig_network_chat_update",
-        "--redefine-sym", "_network_chat_draw=_orig_network_chat_draw",
-        "--redefine-sym", "_network_chat_typing=_orig_network_chat_typing",
-        "--redefine-sym", "_network_chat_handle_up=_orig_network_chat_handle_up",
-        "--redefine-sym", "_network_chat_handle_down=_orig_network_chat_handle_down",
-    ],
-    "port/linux/game/network_objects.c": [
-        "--redefine-sym", "_network_objects_handle_changes=_orig_network_objects_handle_changes",
-    ],
-    "source/camera/director.c": [
-        "--redefine-sym", "_director_update=_orig_director_update",
-        "--redefine-sym", "_director_get_perspective=_orig_director_get_perspective",
-    ],
-    "port/linux/game/render_interpolation.c": [
-        "--redefine-sym", "_render_interpolation_camera=_orig_render_interpolation_camera",
-    ],
-    "source/interface/first_person_weapons.c": [
-        "--redefine-sym", "_first_person_weapon_draw=_orig_first_person_weapon_draw",
-    ],
-    "source/interface/hud_weapon.c": [
-        "--redefine-sym", "_hud_render_weapon_interface=_orig_hud_render_weapon_interface",
-    ],
-    "source/interface/hud_draw.c": [
-        "--redefine-sym", "_hud_draw_bitmap_direct=_orig_hud_draw_bitmap_direct",
-        "--redefine-sym", "_hud_draw_numbers=_orig_hud_draw_numbers",
-        "--redefine-sym", "_real_argb_color_to_pixel32=_hud_draw_real_argb_color_to_pixel32",
-    ],
-    "source/hs/hs.c": [
-        "--redefine-sym", "_hs_compile_and_evaluate=_orig_hs_compile_and_evaluate",
-    ],
-    "source/hs/hs_runtime.c": [
-        "--redefine-sym", "_hs_runtime_update=_orig_hs_runtime_update",
-    ],
-    "port/linux/game/mod_sounds.c": [
-        "--redefine-sym", "_mod_sounds_read=_orig_mod_sounds_read",
-    ],
-    "port/linux/src/sdl_platform.c": [
-        "--redefine-sym", "_platform_next_keystroke=_orig_platform_next_keystroke",
-        "--redefine-sym", "_platform_ui_pointer_read=_orig_platform_ui_pointer_read",
-        "--redefine-sym", "_platform_input_read=_orig_platform_input_read",
-    ],
-    "port/linux/src/xinput_sdl.c": [
-        "--redefine-sym", "_XInputGetState@8=_orig_XInputGetState@8",
-    ],
-    "source/cutscene/cinematics.c": [
-        "--redefine-sym", "_cinematic_start=_orig_cinematic_start",
-    ],
-    "source/scenario/scenario.c": [
-        "--redefine-sym", "_scenario_trigger_volume_test_object=_orig_scenario_trigger_volume_test_object",
-    ],
-    "source/models/models.c": [
-        "--redefine-sym", "_render_model=_orig_render_model",
-    ],
-    "source/game/game_engine.c": [
-        "--redefine-sym", "_game_engine_post_rasterize_objects=_orig_game_engine_post_rasterize_objects",
-        "--redefine-sym", "_game_engine_remap_object_definition=_orig_game_engine_remap_object_definition",
-    ],
-    "port/linux/game/menu_tags.c": [
-        "--redefine-sym", "_menu_tags_loaded=_orig_menu_tags_loaded",
-        "--redefine-sym", "_menu_tags_unloaded=_orig_menu_tags_unloaded",
-    ],
-    "port/linux/game/custom_edition_cache.c": [
-        "--redefine-sym", "_file_reference_create_from_path=_forge_ce_file_reference_create_from_path",
-        "--redefine-sym", "_halo_windows_fopen=_forge_ce_fopen",
-        "--redefine-sym", "_halo_xbox_fopen=_forge_ce_fopen",
-        "--redefine-sym", "_fopen=_forge_ce_fopen",
-        "--redefine-sym", "_halo_xbox_FindFirstFileA@8=_forge_ce_FindFirstFileA@8",
-        "--redefine-sym", "_halo_xbox_FindNextFileA@8=_forge_ce_FindNextFileA@8",
-        "--redefine-sym", "_halo_xbox_CloseHandle@4=_forge_ce_CloseHandle@4",
-    ],
-    "port/linux/game/custom_edition_maps.c": [
-        "--redefine-sym", "_file_reference_create_from_path=_forge_ce_file_reference_create_from_path",
-        "--redefine-sym", "_halo_windows_fopen=_forge_ce_fopen",
-        "--redefine-sym", "_halo_xbox_fopen=_forge_ce_fopen",
-        "--redefine-sym", "_fopen=_forge_ce_fopen",
-        "--redefine-sym", "_halo_xbox_FindFirstFileA@8=_forge_ce_FindFirstFileA@8",
-        "--redefine-sym", "_halo_xbox_FindNextFileA@8=_forge_ce_FindNextFileA@8",
-        "--redefine-sym", "_halo_xbox_CloseHandle@4=_forge_ce_CloseHandle@4",
-        "--redefine-sym", "_fread=_forge_ce_fread",
-        "--redefine-sym", "_fseek=_forge_ce_fseek",
-        "--redefine-sym", "_ftell=_forge_ce_ftell",
-        "--redefine-sym", "_fclose=_forge_ce_fclose",
-    ],
-    "port/linux/game/map_share_files.c": [
-        "--redefine-sym", "_file_reference_create_from_path=_forge_ce_file_reference_create_from_path",
-        "--redefine-sym", "_halo_windows_fopen=_forge_ce_fopen",
-        "--redefine-sym", "_halo_xbox_fopen=_forge_ce_fopen",
-        "--redefine-sym", "_fopen=_forge_ce_fopen",
-        "--redefine-sym", "_halo_xbox_FindFirstFileA@8=_forge_ce_FindFirstFileA@8",
-        "--redefine-sym", "_halo_xbox_FindNextFileA@8=_forge_ce_FindNextFileA@8",
-        "--redefine-sym", "_halo_xbox_CloseHandle@4=_forge_ce_CloseHandle@4",
-    ],
-}
 
 # (as tools/android_build.py's SDL_TAG and tools/linux_sysroot.py's SDL_VERSION)
 SDL_VERSION = "3.4.16"
@@ -335,14 +215,6 @@ def windows_rc(cc: str) -> str:
     return str(path.with_name("llvm-rc" + path.suffix))
 
 
-def windows_objcopy(cc: str) -> str:
-    """LLVM's objcopy beside the clang named cc, else the one on the PATH"""
-    path = Path(cc)
-    if path.parent == Path("."):
-        return "llvm-objcopy"
-    return str(path.with_name("llvm-objcopy" + path.suffix))
-
-
 def clang_release(cc: str) -> Optional[str]:
     """the release (22.1.0) of the clang named cc, or None"""
     try:
@@ -449,20 +321,6 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
         depfile="$out.d",
         deps="gcc",
     )
-    n.variable("windows_objcopy", windows_objcopy(cc))
-    redefine_cmd = (
-        f"{cross_prefix}{compile_launcher(sln)}$windows_cc -MMD -MF $out.d $cflags -c $in -o $out "
-        "&& $windows_objcopy $redefines $out"
-    )
-    if sys.platform == "win32":
-        redefine_cmd = f'cmd /c "{redefine_cmd}"'
-    n.rule(
-        name="windows_cc_redefine",
-        command=redefine_cmd,
-        description="WINDOWS CC+WRAP $out",
-        depfile="$out.d",
-        deps="gcc",
-    )
     # ninja quotes the response file's paths for the shell that runs the
     # rule: Windows quoting on Windows, POSIX quoting elsewhere
     rsp_quoting = "windows" if sys.platform == "win32" else "posix"
@@ -496,7 +354,7 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
     # (a debug build checks its stack frames (/GS), and stops at the first
     # one overrun, as at the first failed assertion; a release build does
     # not, so that an overrun nobody has met cannot end a game)
-    abi = " ".join(WINDOWS_ABI_FLAGS + ["-march=x86-64"] + configuration_defines(sln)
+    abi = " ".join(WINDOWS_ABI_FLAGS + [march_flag(sln)] + configuration_defines(sln)
                    + ([] if getattr(sln, "port_release", False) else ["-fstack-protector-strong"]))
     sdl_include = SDL_DIR / "include"
     libs = " ".join(
@@ -510,7 +368,7 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
         # the Xbox memory window is at 0x80000000, in the upper half of the
         # 32-bit address space
         "-Wl,/LARGEADDRESSAWARE",
-        "-Wl,/STACK:0x1000000",
+        "-Wl,/STACK:0x800000",
     ]
     if getattr(sln, "port_release", False):
         # no console window (the port's log goes to halo.log instead,
@@ -524,30 +382,19 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
              extra_objects: List[Path], implicit_inputs: List[Path]) -> None:
         """the objects and the executable, with the given extra flags"""
         extra = " ".join(extra_cflags)
-        extra_no_lto = " ".join(f for f in extra_cflags if not f.startswith("-flto"))
         objects: List[Path] = []
 
         def add_object(source: Path, cflags: str) -> None:
             obj = obj_dir / source.with_suffix(".o")
             objects.append(obj)
             compiled = inline_export_wrapper(source)
-            redefines = FORGE_OBJCOPY_REDEFINES.get(source.as_posix())
-            if redefines:
-                n.build(
-                    outputs=obj,
-                    rule="windows_cc_redefine",
-                    inputs=compiled,
-                    implicit=[*xdk_headers(), prefix_header, tags_header, source, *implicit_inputs],
-                    variables={"cflags": f"{cflags} {extra_no_lto}", "redefines": " ".join(redefines)},
-                )
-            else:
-                n.build(
-                    outputs=obj,
-                    rule="windows_cc",
-                    inputs=compiled,
-                    implicit=[*xdk_headers(), prefix_header, tags_header, source, *implicit_inputs],
-                    variables={"cflags": f"{cflags} {extra}"},
-                )
+            n.build(
+                outputs=obj,
+                rule="windows_cc",
+                inputs=compiled,
+                implicit=[*xdk_headers(), prefix_header, tags_header, source, *implicit_inputs],
+                variables={"cflags": f"{cflags} {extra}"},
+            )
 
         game_cflags = " ".join([
             abi,
@@ -568,29 +415,14 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
             # Windows SDK, which has headers of the same names
             f"-I{XDK_INCLUDE}",
         ])
-        forge_net_override = _quote(FORGE_DIR / "include" / "forge_net_override.h")
         for source in game_sources(linux_config):
             # The halt screen and version command identify this native build.
             flags = game_cflags
-            src_posix = source.as_posix()
-            if src_posix == "source/main/main.c":
+            if source.as_posix() == "source/main/main.c":
                 flags += " " + updater_defines(getattr(sln, "port_release", False))
-            if src_posix in ("source/cseries/cseries.c", "source/cseries/cseries_windows.c"):
-                flags += " -DHALO_RELEASE"
-            if src_posix in (
-                "source/networking/network_server_message_handler.c",
-                "source/networking/network_client_manager.c",
-            ):
-                flags += f" -include {forge_net_override}"
             add_object(source, flags)
         for source in sorted(Path(linux_config["game_sources"]).glob("*.c")):
-            flags = game_cflags
-            if source.name == "menu_functions.c":
-                flags += f" -include {forge_net_override}"
-            add_object(source, flags)
-        forge_cflags = f"{game_cflags} -I{_quote(FORGE_DIR / 'include')} -I{_quote(sdl_include)} -I{ZLIB_DIR} -DHALO_RELEASE"
-        for source in sorted((FORGE_DIR / "src").glob("*.c")):
-            add_object(source, forge_cflags)
+            add_object(source, game_cflags)
         add_object(STB_VORBIS_SOURCE, game_cflags)
 
         linux_platform = Path(linux_config["platform_sources"])
@@ -631,8 +463,6 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
                 add_object(source, f"{win32_cflags} {mbedtls_include}")
             elif source.name in ("updater.c", "server_mode.c"):
                 add_object(source, f"{platform_cflags} {updater_defines(getattr(sln, 'port_release', False))}")
-            elif source.name == "p2p_lobby.c":
-                add_object(source, f"{platform_cflags} -include {forge_net_override}")
             else:
                 add_object(source, platform_cflags)
         miniupnpc_include = f"-I{MINIUPNPC_DIR / 'include'} -DMINIUPNP_STATICLIB"
