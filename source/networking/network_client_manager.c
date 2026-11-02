@@ -393,6 +393,7 @@ symbols in this file:
 #include "text/unicode.h"
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
+#include "forge_net_override.h" /* port: port/linux/game/forge_net_override.h */
 
 /* ---------- constants */
 
@@ -3250,7 +3251,8 @@ version is this machine's (HALO_PORT_NETWORK_VERSION), and it plays the
 distributed netcode (a host of this version built before the lockstep
 netcode was removed may play that). If not the player is told why (when
 tell), and nothing is joined. */
-boolean network_game_client_advertised_game_compatible(
+/* port: wrapped by network_game_client_advertised_game_compatible in forge_hooks.c */
+boolean orig_network_game_client_advertised_game_compatible(
 	struct network_game_client *client,
 	struct network_advertised_game const *game,
 	boolean tell)
@@ -3368,7 +3370,8 @@ boolean network_game_client_port_advertised_game_summary(
 
 /* port: the advertised game's kind (an OpenCE gametype's mode, and Hardcore:
 port/linux/game/game_modes.h), for the server browser's name of it */
-byte network_game_client_advertised_game_kind(
+/* port: wrapped by network_game_client_advertised_game_kind in forge_hooks.c */
+byte orig_network_game_client_advertised_game_kind(
 	struct network_game_client *client,
 	struct network_advertised_game const *game)
 {

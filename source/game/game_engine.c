@@ -4409,7 +4409,8 @@ void game_engine_handle_server_message(
 	return;
 }
 
-void game_engine_post_rasterize_objects(
+/* port: wrapped by game_engine_post_rasterize_objects in forge_hooks.c */
+void orig_game_engine_post_rasterize_objects(
 	void)
 {
 	if (game_engine && game_engine->post_rasterize_objects)
@@ -8150,7 +8151,8 @@ long game_engine_remap_weapon(
 	return list_index_to_weapon_definition_index(weapon_list_index);
 }
 
-long game_engine_remap_object_definition(
+/* port: wrapped by game_engine_remap_object_definition in forge_hooks.c */
+long orig_game_engine_remap_object_definition(
 	long definition_index)
 {
 	short object_type;

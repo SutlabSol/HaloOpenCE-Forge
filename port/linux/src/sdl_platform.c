@@ -2488,6 +2488,7 @@ void platform_pump_events(void)
 			memset(input_state.keys, 0, sizeof(input_state.keys));
 			memset(input_state.mouse_buttons, 0, sizeof(input_state.mouse_buttons));
 			memset(mouse_buttons_pressed, 0, sizeof(mouse_buttons_pressed));
+			mouse_buttons_down = 0;
 			input_state.focused = FALSE;
 			/* (the scoreboard's pointer goes; the mouse is taken back for
 			the aim as the window has the focus again) */
@@ -2863,7 +2864,7 @@ static void screen_keyboard_update(void)
 }
 
 #endif
-void platform_input_read(struct platform_input_state *state, BOOL consume_motion)
+void orig_platform_input_read(struct platform_input_state *state, BOOL consume_motion)
 {
 	pthread_mutex_lock(&input_lock);
 	*state = input_state;
@@ -2920,4 +2921,52 @@ void platform_input_read(struct platform_input_state *state, BOOL consume_motion
 		input_state.mouse_wheel = 0;
 	}
 	pthread_mutex_unlock(&input_lock);
+}
+
+int platform_window_is_focused(void)
+{
+	int is_focused;
+
+	pthread_mutex_lock(&input_lock);
+	is_focused = input_state.focused != 0;
+	pthread_mutex_unlock(&input_lock);
+	return is_focused;
+}
+
+short platform_vk_key_down(int vk)
+{
+	short down = 0;
+	int scancode;
+
+	if (vk <= 0 || vk >= 256)
+		return 0;
+	pthread_mutex_lock(&input_lock);
+	if (input_state.focused)
+	{
+		if (vk == 0x01)
+			down = (input_state.mouse_buttons[SDL_BUTTON_LEFT] || (mouse_buttons_down & (1u << SDL_BUTTON_LEFT))) ? (short)0x8000 : 0;
+		else if (vk == 0x02)
+			down = (input_state.mouse_buttons[SDL_BUTTON_RIGHT] || (mouse_buttons_down & (1u << SDL_BUTTON_RIGHT))) ? (short)0x8000 : 0;
+		else if (vk == 0x04)
+			down = (input_state.mouse_buttons[SDL_BUTTON_MIDDLE] || (mouse_buttons_down & (1u << SDL_BUTTON_MIDDLE))) ? (short)0x8000 : 0;
+		else if (vk == 0x10)
+			down = (input_state.keys[SDL_SCANCODE_LSHIFT] || input_state.keys[SDL_SCANCODE_RSHIFT]) ? (short)0x8000 : 0;
+		else if (vk == 0x11)
+			down = (input_state.keys[SDL_SCANCODE_LCTRL] || input_state.keys[SDL_SCANCODE_RCTRL]) ? (short)0x8000 : 0;
+		else if (vk == 0x12)
+			down = (input_state.keys[SDL_SCANCODE_LALT] || input_state.keys[SDL_SCANCODE_RALT]) ? (short)0x8000 : 0;
+		else
+		{
+			for (scancode = 0; scancode < SDL_SCANCODE_COUNT; scancode++)
+			{
+				if (input_state.keys[scancode] && virtual_key_from_scancode((SDL_Scancode)scancode) == (BYTE)vk)
+				{
+					down = (short)0x8000;
+					break;
+				}
+			}
+		}
+	}
+	pthread_mutex_unlock(&input_lock);
+	return down;
 }
