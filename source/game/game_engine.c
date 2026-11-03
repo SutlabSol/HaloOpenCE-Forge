@@ -5712,8 +5712,12 @@ void game_engine_playlist_next(
 boolean game_engine_should_end_game(
 	void)
 {
+	extern int g_forge_session_enabled; /* port: port/linux/game/forge_runtime_tags.c */
 	boolean should_end_game = FALSE;
 
+	/* port: Forge sessions continue indefinitely until ended from the menu */
+	if (g_forge_session_enabled)
+		return FALSE;
 	/* port: Infection's round ends by its own rules (infection.c) */
 	if (infection_enabled())
 		return FALSE;
@@ -7074,9 +7078,10 @@ long game_engine_did_player_win(
 boolean multiple_teams_alive(
 	void)
 {
+	extern int g_forge_session_enabled; /* port: port/linux/game/forge_runtime_tags.c */
 	boolean result = FALSE;
 
-	if (players_in_game() <= 1)
+	if (g_forge_session_enabled || players_in_game() <= 1)
 		return TRUE;
 	else
 	{

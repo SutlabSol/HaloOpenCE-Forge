@@ -260,7 +260,7 @@ static FILE *forge_open_data_file_rb(char const *rel_path)
 
 	if (!rel_path || !rel_path[0])
 		return NULL;
-	f = fopen(rel_path, "rb");
+	f = (FILE *)forge_host_fopen(rel_path, "rb");
 	if (f)
 		return f;
 	if (_strnicmp(rel_path, "d:\\", 3) == 0 || _strnicmp(rel_path, "d:/", 3) == 0)
@@ -2717,7 +2717,7 @@ static void forge_reset_transient_session_state(int clear_saved_map_state)
 int forge_is_main_menu_active(void)
 {
 	struct scenario *scen = global_scenario_get();
-	char const *cur_map = main_get_map_name();
+	char const *cur_map = forge_get_active_map_name();
 	if (!scen || scen->type == 2 /* _scenario_type_main_menu */)
 		return 1;
 	if (cur_map && (_stricmp(cur_map, "levels\\ui\\ui") == 0 || _stricmp(cur_map, "ui") == 0))
@@ -2729,7 +2729,7 @@ void network_chat_update(void)
 {
 	unsigned long now = system_milliseconds();
 	float dt = 0.016f;
-	char const *cur_map = main_get_map_name();
+	char const *cur_map = forge_get_active_map_name();
 
 	orig_network_chat_update();
 

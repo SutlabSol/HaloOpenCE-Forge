@@ -1052,6 +1052,27 @@ unsigned long custom_edition_map_version(
 	return version;
 }
 
+static boolean custom_edition_file_is_forge_xbox_mp(
+	struct custom_edition_file *file,
+	struct cache_file_identity const *identity)
+{
+	uint32_t sig = 0;
+
+	if (!file || !identity)
+		return FALSE;
+	if (identity->format != _cache_file_format_xbox_cache ||
+		identity->scenario_type != _scenario_type_multiplayer)
+	{
+		return FALSE;
+	}
+	if (!file->source.read ||
+		!file->source.read(file->source.context, 0x1FCu, &sig, sizeof(sig)))
+	{
+		return FALSE;
+	}
+	return sig == 0x464C4731u;
+}
+
 boolean custom_edition_cache_present(
 	char const *level_name,
 	unsigned long version,
@@ -1084,17 +1105,14 @@ boolean custom_edition_cache_present(
 			(int)MIN(64, map_share_name_base_length(name)), name);
 		return FALSE;
 	}
-	if (!halo_custom_edition_tag_cache())
-	{
-		error(_error_silent, "custom edition: the map '%s' cannot be played: %s", level_name,
-			custom_edition_unavailable_reason());
-		snprintf(message, message_size, "The map %.64s can't be played: Custom Edition maps can't run (see debug.txt).",
-			name);
-		return FALSE;
-	}
 	if (custom_edition_file_open(&file, path))
 	{
 		status = cache_file_identify(&file.source, &identity);
+		if (status == _cache_file_status_ok && custom_edition_file_is_forge_xbox_mp(&file, &identity))
+		{
+			custom_edition_file_close(&file);
+			return TRUE;
+		}
 		/* (the resource maps the map's tags are read from: those its tag
 		index says it holds tags in) */
 		if (status == _cache_file_status_ok && identity.format == _cache_file_format_custom_edition_cache &&
@@ -1103,6 +1121,14 @@ boolean custom_edition_cache_present(
 			needed = (1u << _resource_map_bitmaps) | (1u << _resource_map_sounds) | (1u << _resource_map_locale);
 		}
 		custom_edition_file_close(&file);
+	}
+	if (!halo_custom_edition_tag_cache())
+	{
+		error(_error_silent, "custom edition: the map '%s' cannot be played: %s", level_name,
+			custom_edition_unavailable_reason());
+		snprintf(message, message_size, "The map %.64s can't be played: Custom Edition maps can't run (see debug.txt).",
+			name);
+		return FALSE;
 	}
 	if (status != _cache_file_status_ok || identity.format != _cache_file_format_custom_edition_cache)
 	{
@@ -1158,9 +1184,23 @@ boolean custom_edition_cache_multiplayer(
 	char const *map_name)
 {
 	struct cache_file_identity identity;
+	char path[MAP_PATH_SIZE];
+	struct custom_edition_file file;
+	boolean is_forge_xbox = FALSE;
 
-	return custom_edition_cache_identify(map_name, &identity) &&
-		identity.scenario_type == _scenario_type_multiplayer;
+	if (custom_edition_cache_identify(map_name, &identity))
+		return identity.scenario_type == _scenario_type_multiplayer;
+
+	if (custom_edition_map_path(map_name, path) && custom_edition_file_open(&file, path))
+	{
+		if (cache_file_identify(&file.source, &identity) == _cache_file_status_ok &&
+			custom_edition_file_is_forge_xbox_mp(&file, &identity))
+		{
+			is_forge_xbox = TRUE;
+		}
+		custom_edition_file_close(&file);
+	}
+	return is_forge_xbox;
 }
 
 struct cache_file_tag_header *custom_edition_cache_tags_load(
