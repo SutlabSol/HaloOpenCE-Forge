@@ -354,7 +354,7 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
     # (a debug build checks its stack frames (/GS), and stops at the first
     # one overrun, as at the first failed assertion; a release build does
     # not, so that an overrun nobody has met cannot end a game)
-    abi = " ".join(WINDOWS_ABI_FLAGS + [march_flag(sln)] + configuration_defines(sln)
+    abi = " ".join(WINDOWS_ABI_FLAGS + ["-march=x86-64"] + configuration_defines(sln)
                    + ([] if getattr(sln, "port_release", False) else ["-fstack-protector-strong"]))
     sdl_include = SDL_DIR / "include"
     libs = " ".join(
@@ -368,7 +368,7 @@ def generate_windows_build(n: Writer, sln: Any) -> None:
         # the Xbox memory window is at 0x80000000, in the upper half of the
         # 32-bit address space
         "-Wl,/LARGEADDRESSAWARE",
-        "-Wl,/STACK:0x800000",
+        "-Wl,/STACK:0x1000000",
     ]
     if getattr(sln, "port_release", False):
         # no console window (the port's log goes to halo.log instead,
