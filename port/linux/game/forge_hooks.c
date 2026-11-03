@@ -2718,7 +2718,7 @@ static void forge_reset_transient_session_state(int clear_saved_map_state)
 
 int forge_is_main_menu_active(void)
 {
-	struct scenario *scen = global_scenario_get();
+	struct scenario *scen = global_scenario_try_and_get();
 	char const *cur_map = forge_get_active_map_name();
 	if (!scen || scen->type == 2 /* _scenario_type_main_menu */)
 		return 1;
@@ -3193,7 +3193,7 @@ void menu_tags_loaded(char const *map_name)
 			g_forge_session_enabled = 1;
 		}
 		forge_reset_transient_session_state(1);
-		snprintf(g_last_forge_map_name, sizeof(g_last_forge_map_name), "%s", forge_get_active_map_name());
+
 	}
 
 	forge_normalize_mcc_hud_tags();
