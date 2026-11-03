@@ -83,6 +83,161 @@ extern void sound_render(void);
 extern void main_present_frame(void);
 extern long halo_screen_width(void);
 extern void platform_translate_path(const char *xbox_path, char *host_path, unsigned long host_path_size);
+extern char *main_get_multiplayer_map_name(void);
+
+void *forge_host_fopen(char const *path, char const *mode)
+{
+	char norm[1024];
+	char host_path[1024];
+	char d_xbox[1024];
+	size_t i;
+	FILE *f;
+
+	if (!path || !path[0] || !mode)
+		return NULL;
+
+	for (i = 0; path[i] && i + 1 < sizeof(norm); i++)
+		norm[i] = (path[i] == '\\') ? '/' : path[i];
+	norm[i] = '\0';
+
+	if ((norm[0] == 'd' || norm[0] == 'D' ||
+		 norm[0] == 'h' || norm[0] == 'H' ||
+		 norm[0] == 'z' || norm[0] == 'Z' ||
+		 norm[0] == 't' || norm[0] == 'T' ||
+		 norm[0] == 'u' || norm[0] == 'U') &&
+		norm[1] == ':' && norm[2] == '/')
+	{
+		platform_translate_path(path, host_path, sizeof(host_path));
+		return fopen(host_path, mode);
+	}
+
+	if (norm[0] == '/' ||
+		(((norm[0] >= 'A' && norm[0] <= 'Z') || (norm[0] >= 'a' && norm[0] <= 'z')) && norm[1] == ':'))
+	{
+		return fopen(norm, mode);
+	}
+
+	snprintf(d_xbox, sizeof(d_xbox), "d:\\%s", norm);
+	platform_translate_path(d_xbox, host_path, sizeof(host_path));
+	f = fopen(host_path, mode);
+	if (f)
+		return f;
+
+	return fopen(norm, mode);
+}
+
+int forge_host_remove(char const *path)
+{
+	char norm[1024];
+	char host_path[1024];
+	char d_xbox[1024];
+	size_t i;
+
+	if (!path || !path[0])
+		return -1;
+
+	for (i = 0; path[i] && i + 1 < sizeof(norm); i++)
+		norm[i] = (path[i] == '\\') ? '/' : path[i];
+	norm[i] = '\0';
+
+	if ((norm[0] == 'd' || norm[0] == 'D' ||
+		 norm[0] == 'h' || norm[0] == 'H' ||
+		 norm[0] == 'z' || norm[0] == 'Z' ||
+		 norm[0] == 't' || norm[0] == 'T' ||
+		 norm[0] == 'u' || norm[0] == 'U') &&
+		norm[1] == ':' && norm[2] == '/')
+	{
+		platform_translate_path(path, host_path, sizeof(host_path));
+		return remove(host_path);
+	}
+
+	if (norm[0] == '/' ||
+		(((norm[0] >= 'A' && norm[0] <= 'Z') || (norm[0] >= 'a' && norm[0] <= 'z')) && norm[1] == ':'))
+	{
+		return remove(norm);
+	}
+
+	snprintf(d_xbox, sizeof(d_xbox), "d:\\%s", norm);
+	platform_translate_path(d_xbox, host_path, sizeof(host_path));
+	if (remove(host_path) == 0)
+		return 0;
+
+	return remove(norm);
+}
+
+char const *forge_get_active_map_name(void)
+{
+	static char s_active_map[256];
+	struct scenario *scen = global_scenario_get();
+	char const *ce_loaded;
+	char const *loaded_leaf;
+	char const *mp_map;
+	char const *sp_map;
+
+	if (!scen || scen->type == 2 /* _scenario_type_main_menu */)
+		return "levels\\ui\\ui";
+
+	ce_loaded = custom_edition_cache_loaded_path();
+	if (ce_loaded && ce_loaded[0])
+	{
+		char const *slash = strrchr(ce_loaded, '\\');
+		char const *slash2 = strrchr(ce_loaded, '/');
+		char const *stem;
+		char clean_stem[128];
+		char *dot;
+		if (slash2 && (!slash || slash2 > slash))
+			slash = slash2;
+		stem = slash ? (slash + 1) : ce_loaded;
+		snprintf(clean_stem, sizeof(clean_stem), "%s", stem);
+		dot = strrchr(clean_stem, '.');
+		if (dot && _stricmp(dot, ".map") == 0)
+			*dot = '\0';
+		if (clean_stem[0])
+		{
+			snprintf(s_active_map, sizeof(s_active_map), "custom_maps\\%s", clean_stem);
+			return s_active_map;
+		}
+	}
+
+	loaded_leaf = cache_file_loaded_map_name();
+	mp_map = main_get_multiplayer_map_name();
+	sp_map = main_get_map_name();
+
+	if (loaded_leaf && loaded_leaf[0] && _stricmp(loaded_leaf, "ui") != 0)
+	{
+		if (mp_map && mp_map[0])
+		{
+			char const *ms = strrchr(mp_map, '\\');
+			char const *ms2 = strrchr(mp_map, '/');
+			char const *mleaf;
+			if (ms2 && (!ms || ms2 > ms))
+				ms = ms2;
+			mleaf = ms ? (ms + 1) : mp_map;
+			if (_stricmp(mleaf, loaded_leaf) == 0)
+				return mp_map;
+		}
+		if (sp_map && sp_map[0])
+		{
+			char const *ss = strrchr(sp_map, '\\');
+			char const *ss2 = strrchr(sp_map, '/');
+			char const *sleaf;
+			if (ss2 && (!ss || ss2 > ss))
+				ss = ss2;
+			sleaf = ss ? (ss + 1) : sp_map;
+			if (_stricmp(sleaf, loaded_leaf) == 0)
+				return sp_map;
+		}
+		return loaded_leaf;
+	}
+
+	if (scen->type == 1 /* _scenario_type_multiplayer */ && mp_map && mp_map[0])
+		return mp_map;
+
+	return (sp_map && sp_map[0]) ? sp_map : "levels\\ui\\ui";
+}
+
+#define fopen(p, m) ((FILE *)forge_host_fopen((p), (m)))
+#define remove(p) forge_host_remove((p))
 extern long bitmap_format_to_d3d_format(short format, word flags);
 extern long bitmap_format_to_d3d_linear_format(short format, word flags);
 extern void models_fix_transparent_part_links(void);
@@ -1123,7 +1278,7 @@ static int is_excluded_map_local_helper_tag(char const *tag_path)
 
 static void scan_loaded_map_into_catalog(void)
 {
-	char const *cur_map = main_get_map_name();
+	char const *cur_map = forge_get_active_map_name();
 	struct scenario *scen;
 	long tag_count = 0;
 	struct forge_cache_file_tag_instance *instances;
@@ -6572,29 +6727,88 @@ static int extract_embedded_forge_base_map_stem(char const *map_path, char *out_
 	return out_stem[0] ? 1 : 0;
 }
 
+static int map_file_has_equal_tag_count(char const *path_a, char const *path_b)
+{
+	FILE *fa;
+	FILE *fb;
+	unsigned char hdr_a[0x40];
+	unsigned char hdr_b[0x40];
+	unsigned char idx_a[0x28];
+	unsigned char idx_b[0x28];
+	unsigned long off_a, off_b;
+	long cnt_a = -1, cnt_b = -2;
+
+	fa = fopen(path_a, "rb");
+	if (!fa)
+		return 0;
+	fb = fopen(path_b, "rb");
+	if (!fb)
+	{
+		fclose(fa);
+		return 0;
+	}
+	if (fread(hdr_a, 1, sizeof(hdr_a), fa) == sizeof(hdr_a) &&
+		fread(hdr_b, 1, sizeof(hdr_b), fb) == sizeof(hdr_b))
+	{
+		off_a = *(unsigned long const *)(hdr_a + 0x10);
+		off_b = *(unsigned long const *)(hdr_b + 0x10);
+		if (fseek(fa, (long)off_a, SEEK_SET) == 0 &&
+			fseek(fb, (long)off_b, SEEK_SET) == 0 &&
+			fread(idx_a, 1, sizeof(idx_a), fa) == sizeof(idx_a) &&
+			fread(idx_b, 1, sizeof(idx_b), fb) == sizeof(idx_b))
+		{
+			cnt_a = *(long const *)(idx_a + 0x0C);
+			cnt_b = *(long const *)(idx_b + 0x0C);
+		}
+	}
+	fclose(fa);
+	fclose(fb);
+	return (cnt_a > 0 && cnt_a == cnt_b) ? 1 : 0;
+}
+
 static int try_resolve_clean_ce_map_by_stem(char const *stem, char *out_path, size_t out_sz)
 {
 	char candidate[512];
 	char h_xbox[128];
-	FILE *f;
+	char dummy_stem[64];
 	if (!stem || !stem[0])
 		return 0;
 
 	snprintf(h_xbox, sizeof(h_xbox), "h:\\maps\\%s.map", stem);
 	platform_translate_path(h_xbox, candidate, sizeof(candidate));
-	if (is_ce_v609_map_file(candidate)) { snprintf(out_path, out_sz, "%s", candidate); return 1; }
+	if (is_ce_v609_map_file(candidate) && !extract_embedded_forge_base_map_stem(candidate, dummy_stem, sizeof(dummy_stem)))
+	{
+		snprintf(out_path, out_sz, "%s", candidate);
+		return 1;
+	}
 
 	snprintf(candidate, sizeof(candidate), "C:/Program Files (x86)/Microsoft Games/Halo Custom Edition/maps/%s.map", stem);
-	if (is_ce_v609_map_file(candidate)) { snprintf(out_path, out_sz, "%s", candidate); return 1; }
+	if (is_ce_v609_map_file(candidate) && !extract_embedded_forge_base_map_stem(candidate, dummy_stem, sizeof(dummy_stem)))
+	{
+		snprintf(out_path, out_sz, "%s", candidate);
+		return 1;
+	}
 
 	snprintf(candidate, sizeof(candidate), "C:/Program Files/Microsoft Games/Halo Custom Edition/maps/%s.map", stem);
-	if (is_ce_v609_map_file(candidate)) { snprintf(out_path, out_sz, "%s", candidate); return 1; }
+	if (is_ce_v609_map_file(candidate) && !extract_embedded_forge_base_map_stem(candidate, dummy_stem, sizeof(dummy_stem)))
+	{
+		snprintf(out_path, out_sz, "%s", candidate);
+		return 1;
+	}
 
 	snprintf(candidate, sizeof(candidate), "custom_maps/%s.map", stem);
-	if (is_ce_v609_map_file(candidate)) { snprintf(out_path, out_sz, "%s", candidate); return 1; }
+	if (is_ce_v609_map_file(candidate) && !extract_embedded_forge_base_map_stem(candidate, dummy_stem, sizeof(dummy_stem)))
+	{
+		snprintf(out_path, out_sz, "%s", candidate);
+		return 1;
+	}
 
 	snprintf(candidate, sizeof(candidate), "maps/%s.map", stem);
-	if ((f = fopen(candidate, "rb")) != NULL) { fclose(f); snprintf(out_path, out_sz, "%s", candidate); return 1; }
+	if (is_ce_v609_map_file(candidate) && !extract_embedded_forge_base_map_stem(candidate, dummy_stem, sizeof(dummy_stem)))
+	{
+		snprintf(out_path, out_sz, "%s", candidate);
+		return 1;
+	}
 
 	return 0;
 }
@@ -6604,6 +6818,7 @@ static void resolve_current_base_map_path(char *out_path, size_t out_sz)
 	char const *ce_loaded = custom_edition_cache_loaded_path();
 	char const *map_leaf;
 	char base_stem[64];
+	char clean_candidate[512];
 	FILE *f;
 
 	if (ce_loaded && ce_loaded[0])
@@ -6615,8 +6830,10 @@ static void resolve_current_base_map_path(char *out_path, size_t out_sz)
 		{
 			if (extract_embedded_forge_base_map_stem(rel_ce, base_stem, sizeof(base_stem)) &&
 				_stricmp(base_stem, rel_ce) != 0 &&
-				try_resolve_clean_ce_map_by_stem(base_stem, out_path, out_sz))
+				try_resolve_clean_ce_map_by_stem(base_stem, clean_candidate, sizeof(clean_candidate)) &&
+				map_file_has_equal_tag_count(rel_ce, clean_candidate))
 			{
+				snprintf(out_path, out_sz, "%s", clean_candidate);
 				return;
 			}
 			snprintf(out_path, out_sz, "%s", rel_ce);
@@ -6624,30 +6841,47 @@ static void resolve_current_base_map_path(char *out_path, size_t out_sz)
 		}
 	}
 
-	map_leaf = main_get_map_name();
+	map_leaf = forge_get_active_map_name();
 	if (map_leaf && map_leaf[0])
 	{
 		char const *slash = strrchr(map_leaf, '\\');
+		char const *slash2 = strrchr(map_leaf, '/');
 		char candidate[512];
-		if (!slash)
-			slash = strrchr(map_leaf, '/');
+		if (slash2 && (!slash || slash2 > slash))
+			slash = slash2;
 		if (slash)
 			map_leaf = slash + 1;
 
 		snprintf(candidate, sizeof(candidate), "custom_maps/%s.map", map_leaf);
-		if (extract_embedded_forge_base_map_stem(candidate, base_stem, sizeof(base_stem)) &&
-			_stricmp(base_stem, map_leaf) != 0 &&
-			try_resolve_clean_ce_map_by_stem(base_stem, out_path, out_sz))
-		{
-			return;
-		}
 		if (is_ce_v609_map_file(candidate))
 		{
+			if (extract_embedded_forge_base_map_stem(candidate, base_stem, sizeof(base_stem)) &&
+				_stricmp(base_stem, map_leaf) != 0 &&
+				try_resolve_clean_ce_map_by_stem(base_stem, clean_candidate, sizeof(clean_candidate)) &&
+				map_file_has_equal_tag_count(candidate, clean_candidate))
+			{
+				snprintf(out_path, out_sz, "%s", clean_candidate);
+				return;
+			}
 			snprintf(out_path, out_sz, "%s", candidate);
 			return;
 		}
 		if (try_resolve_clean_ce_map_by_stem(map_leaf, out_path, out_sz))
 			return;
+
+		if ((f = fopen(candidate, "rb")) != NULL)
+		{
+			fclose(f);
+			snprintf(out_path, out_sz, "%s", candidate);
+			return;
+		}
+		snprintf(candidate, sizeof(candidate), "maps/%s.map", map_leaf);
+		if ((f = fopen(candidate, "rb")) != NULL)
+		{
+			fclose(f);
+			snprintf(out_path, out_sz, "%s", candidate);
+			return;
+		}
 	}
 
 	if (try_resolve_clean_ce_map_by_stem("bloodgulch", out_path, out_sz))
@@ -6670,9 +6904,12 @@ int forge_ui_save_copy_as(char const *new_map_name)
 
 	if (!new_map_name || !new_map_name[0])
 	{
-		char const *cur = main_get_map_name();
+		char const *cur = forge_get_active_map_name();
 		char const *slash = cur ? strrchr(cur, '\\') : NULL;
-		snprintf(clean_name, sizeof(clean_name), "%s_forge", slash ? (slash + 1) : "bloodgulch");
+		char const *slash2 = cur ? strrchr(cur, '/') : NULL;
+		if (slash2 && (!slash || slash2 > slash))
+			slash = slash2;
+		snprintf(clean_name, sizeof(clean_name), "%s_forge", slash ? (slash + 1) : (cur && cur[0] ? cur : "bloodgulch"));
 	}
 	else
 	{
@@ -6681,6 +6918,7 @@ int forge_ui_save_copy_as(char const *new_map_name)
 
 	resolve_current_base_map_path(base_map_path, sizeof(base_map_path));
 
+	CreateDirectoryA("d:\\custom_maps", NULL);
 	CreateDirectoryA("custom_maps", NULL);
 
 	ok = forge_export_scenario_map(
@@ -6726,9 +6964,12 @@ void forge_trigger_save_map_action(void)
 	/* Otherwise, open the initial save prompt so the user can name their custom map */
 	if (!g_forge.save_map_name[0])
 	{
-		char const *cur = main_get_map_name();
+		char const *cur = forge_get_active_map_name();
 		char const *slash = cur ? strrchr(cur, '\\') : NULL;
-		snprintf(g_forge.save_map_name, sizeof(g_forge.save_map_name), "%s_forge", slash ? (slash + 1) : "custom");
+		char const *slash2 = cur ? strrchr(cur, '/') : NULL;
+		if (slash2 && (!slash || slash2 > slash))
+			slash = slash2;
+		snprintf(g_forge.save_map_name, sizeof(g_forge.save_map_name), "%s_forge", slash ? (slash + 1) : (cur && cur[0] ? cur : "custom"));
 		g_forge.save_map_name_len = (int)strlen(g_forge.save_map_name);
 	}
 	g_forge.active_modal = _forge_modal_save_copy_as;
@@ -9739,7 +9980,7 @@ int forge_cache_active_map_tag(uint32_t group_tag, char const *tag_path)
 
 	/* Case 2: Active Xbox (v5) map (stock, custom Xbox, or Forge-saved map) */
 	{
-		char const *cur_map = main_get_map_name();
+		char const *cur_map = forge_get_active_map_name();
 		char const *m_slash;
 		char map_leaf[64];
 		char resolved_map[512];

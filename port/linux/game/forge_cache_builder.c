@@ -37,7 +37,7 @@ extern void *custom_edition_sounds_encode(
 	long rate,
 	long encoded_rate,
 	unsigned long *encoded_bytes);
-extern void platform_translate_path(char const *xbox_path, char *out_path, size_t out_size);
+extern void platform_translate_path(char const *xbox_path, char *out_path, unsigned long out_size);
 
 #include <ctype.h>
 #include <stdio.h>
@@ -66,6 +66,9 @@ extern void platform_translate_path(char const *xbox_path, char *out_path, size_
 #undef memcpy
 #undef memmove
 #undef memset
+
+#define fopen(p, m) ((FILE *)forge_host_fopen((p), (m)))
+#define remove(p) forge_host_remove((p))
 
 /* ---------- constants */
 
@@ -5472,15 +5475,44 @@ static int forge_build_xbox_flg1_map(
 		return 0;
 	}
 
-	/* If in_f is an already-saved FLG1 Xbox map, strip its previous trailer at 0x1E4 */
+	/* If in_f is an already-saved FLG1 Xbox map, strip its previous trailer at 0x1E4 and preserve its Base Map stem */
 	{
 		uint8_t hdr_peek[0x200];
 		if (fread(hdr_peek, 1, sizeof(hdr_peek), in_f) == sizeof(hdr_peek))
 		{
 			uint32_t prev_sig = read_u32(hdr_peek + 0x1FCu);
 			uint32_t prev_st = read_u32(hdr_peek + 0x1E4u);
+			uint32_t prev_st_sz = read_u32(hdr_peek + 0x1E8u);
 			if (prev_sig == 0x464C4731u && prev_st >= 0x800u && (long)prev_st < raw_sz)
+			{
+				if (prev_st_sz > 0 && prev_st_sz < 262144u && (long)(prev_st + prev_st_sz) <= raw_sz)
+				{
+					char *st_buf = (char *)malloc(prev_st_sz + 1u);
+					if (st_buf)
+					{
+						if (fseek(in_f, (long)prev_st, SEEK_SET) == 0 &&
+							fread(st_buf, 1, prev_st_sz, in_f) == prev_st_sz)
+						{
+							char const *bm;
+							st_buf[prev_st_sz] = '\0';
+							bm = strstr(st_buf, "Base Map: ");
+							if (bm)
+							{
+								size_t bi = 0;
+								bm += 10;
+								while (bm[bi] && bm[bi] != '\r' && bm[bi] != '\n' && bi + 1 < sizeof(base_stem))
+								{
+									base_stem[bi] = bm[bi];
+									bi++;
+								}
+								base_stem[bi] = '\0';
+							}
+						}
+						free(st_buf);
+					}
+				}
 				raw_sz = (long)prev_st;
+			}
 		}
 		fseek(in_f, 0, SEEK_SET);
 	}
@@ -5495,7 +5527,9 @@ static int forge_build_xbox_flg1_map(
 	fclose(in_f);
 	out.size = (uint32_t)raw_sz;
 
-	if (read_u32(out.data + 0x00u) != CACHE_HEADER_SIGNATURE || read_s32(out.data + 0x04u) != CACHE_VERSION_XBOX)
+	if (read_u32(out.data + 0x00u) != CACHE_HEADER_SIGNATURE ||
+		read_s32(out.data + 0x04u) != CACHE_VERSION_XBOX ||
+		read_s16(out.data + 0x60u) != 1)
 	{
 		buf_free(&out);
 		return 0;
@@ -5533,6 +5567,178 @@ static int forge_build_xbox_flg1_map(
 	return 1;
 }
 
+static void cb_neutralize_baked_object_placement(
+	struct forge_byte_buf *out,
+	uint32_t tag_data_offset,
+	uint32_t scnr_foff,
+	uint32_t group_tag,
+	float x,
+	float y,
+	float z)
+{
+	uint32_t place_field_off = 0, place_elem_sz = 0;
+	int is_netgame_eq = 0;
+	int32_t cnt, k, best_k = -1;
+	uint32_t addr, arr_foff;
+	float best_d2 = 0.05f;
+
+	if (!out || !out->data)
+		return;
+
+	if (group_tag == 0x77656170u || group_tag == 0x65716970u)
+	{
+		is_netgame_eq = 1;
+		place_field_off = (uint32_t)offsetof(struct scenario, netgame_equipment);
+		place_elem_sz = 144u;
+	}
+	else if (group_tag == 0x76656869u)
+	{
+		place_field_off = (uint32_t)offsetof(struct scenario, vehicles);
+		place_elem_sz = 120u;
+	}
+	else if (group_tag == 0x62697064u)
+	{
+		place_field_off = (uint32_t)offsetof(struct scenario, bipeds);
+		place_elem_sz = 120u;
+	}
+	else
+	{
+		place_field_off = (uint32_t)offsetof(struct scenario, scenery);
+		place_elem_sz = 72u;
+	}
+
+	if (scnr_foff + place_field_off + 12u > out->size)
+		return;
+	cnt = read_s32(out->data + scnr_foff + place_field_off + 0u);
+	addr = read_u32(out->data + scnr_foff + place_field_off + 4u);
+	if (cnt <= 0 || addr < CE_TAG_BASE_ADDR)
+		return;
+	arr_foff = tag_data_offset + (addr - CE_TAG_BASE_ADDR);
+	if (arr_foff + (uint32_t)cnt * place_elem_sz > out->size)
+		return;
+
+	for (k = 0; k < cnt; k++)
+	{
+		uint32_t eo = arr_foff + (uint32_t)k * place_elem_sz;
+		uint32_t pos_off = is_netgame_eq ? 0x40u : 0x08u;
+		float ex, ey, ez, dx, dy, dz, d2;
+		if (is_netgame_eq)
+		{
+			if (read_s32(out->data + eo + 0x5Cu) == -1)
+				continue;
+		}
+		else
+		{
+			if (read_s16(out->data + eo + 0x00u) < 0)
+				continue;
+		}
+		ex = read_f32(out->data + eo + pos_off + 0u);
+		ey = read_f32(out->data + eo + pos_off + 4u);
+		ez = read_f32(out->data + eo + pos_off + 8u);
+		dx = ex - x;
+		dy = ey - y;
+		dz = ez - z;
+		d2 = dx * dx + dy * dy + dz * dz;
+		if (d2 <= best_d2)
+		{
+			best_d2 = d2;
+			best_k = k;
+		}
+	}
+
+	if (best_k >= 0)
+	{
+		uint32_t eo = arr_foff + (uint32_t)best_k * place_elem_sz;
+		if (is_netgame_eq)
+		{
+			memset(out->data + eo + 0x50u, 0, 16u);
+			write_s32(out->data + eo + 0x5Cu, -1);
+			write_f32(out->data + eo + 0x40u, -99999.0f);
+			write_f32(out->data + eo + 0x44u, -99999.0f);
+			write_f32(out->data + eo + 0x48u, -99999.0f);
+		}
+		else
+		{
+			write_s16(out->data + eo + 0x00u, -1);
+			write_s16(out->data + eo + 0x02u, -1);
+			write_f32(out->data + eo + 0x08u, -99999.0f);
+			write_f32(out->data + eo + 0x0Cu, -99999.0f);
+			write_f32(out->data + eo + 0x10u, -99999.0f);
+		}
+	}
+}
+
+static void cb_undo_previous_flg1_edits(
+	struct forge_byte_buf *out,
+	uint32_t tag_data_offset,
+	uint32_t scnr_foff,
+	char const *prev_state_text)
+{
+	char const *cur = prev_state_text;
+	char line[512];
+
+	if (!out || !out->data || !prev_state_text)
+		return;
+
+	while (*cur)
+	{
+		size_t len = 0;
+		while (cur[len] && cur[len] != '\n' && cur[len] != '\r')
+			len++;
+		if (len > 0 && len < sizeof(line))
+		{
+			memcpy(line, cur, len);
+			line[len] = '\0';
+			if (strncmp(line, "DEFAULT_EDIT|", 13) == 0)
+			{
+				unsigned int grp = 0;
+				int del_flag = 0;
+				float ox = 0.0f, oy = 0.0f, oz = 0.0f;
+				float nx = 0.0f, ny = 0.0f, nz = 0.0f;
+				float nyaw = 0.0f, npitch = 0.0f, nroll = 0.0f;
+				if (sscanf(line + 13, "%x|%d|%f|%f|%f|%f|%f|%f|%f|%f|%f",
+						&grp, &del_flag, &ox, &oy, &oz, &nx, &ny, &nz, &nyaw, &npitch, &nroll) >= 8 &&
+					!del_flag)
+				{
+					struct forge_default_object_edit rev;
+					memset(&rev, 0, sizeof(rev));
+					rev.group_tag = (uint32_t)grp;
+					rev.orig_x = nx;
+					rev.orig_y = ny;
+					rev.orig_z = nz;
+					rev.new_x = ox;
+					rev.new_y = oy;
+					rev.new_z = oz;
+					rev.new_yaw = nyaw;
+					rev.new_pitch = npitch;
+					rev.new_roll = nroll;
+					rev.deleted = 0;
+					inplace_apply_default_object_edit(out, tag_data_offset, scnr_foff, &rev);
+				}
+			}
+			else if (strncmp(line, "OBJECT|", 7) == 0)
+			{
+				char const *p1 = strchr(line + 7, '|');
+				char const *p2 = p1 ? strchr(p1 + 1, '|') : NULL;
+				if (p1 && p2)
+				{
+					unsigned int grp = 0;
+					int baked_flag = 0;
+					float ox = 0.0f, oy = 0.0f, oz = 0.0f;
+					sscanf(line + 7, "%x", &grp);
+					if (sscanf(p2 + 1, "%d|%f|%f|%f", &baked_flag, &ox, &oy, &oz) == 4 && baked_flag == 1)
+					{
+						cb_neutralize_baked_object_placement(out, tag_data_offset, scnr_foff, (uint32_t)grp, ox, oy, oz);
+					}
+				}
+			}
+		}
+		cur += len;
+		while (*cur == '\r' || *cur == '\n')
+			cur++;
+	}
+}
+
 int forge_export_scenario_map(
 	char const *base_map_path,
 	struct forge_scenario_edit_state const *edits,
@@ -5549,6 +5755,10 @@ int forge_export_scenario_map(
 	uint32_t scnr_addr, scnr_off, scnr_foff;
 	uint32_t orig_vtx_off, orig_vtx_size, orig_model_size, orig_idx_off, orig_idx_size;
 	uint32_t tag_data_offset;
+	uint32_t orig_tag_end = 0;
+	uint8_t *prev_media_buf = NULL;
+	uint32_t prev_media_size = 0;
+	char *prev_state_text = NULL;
 	int32_t i, j;
 	FILE *f;
 
@@ -5557,6 +5767,7 @@ int forge_export_scenario_map(
 
 #undef _mkdir
 #undef mkdir
+	FORGE_MKDIR("d:\\custom_maps");
 	FORGE_MKDIR("custom_maps");
 
 	/* Ensure we open a Custom Edition (v609) base map container matching the current map (or fall back to OpenCE's Xbox v5 map) */
@@ -5619,6 +5830,47 @@ int forge_export_scenario_map(
 	orig_model_size = read_u32(base_map.data + base_map.tag_data_offset + 0x20u);
 	orig_idx_off = orig_vtx_off + orig_vtx_size;
 	orig_idx_size = (orig_model_size >= orig_vtx_size) ? (orig_model_size - orig_vtx_size) : 0u;
+	orig_tag_end = base_map.tag_data_offset + base_map.tag_data_size;
+
+	/* If base_map is already an FLG1 v609 map, strip its previous trailer and preserve any deferred raw media */
+	if (read_u32(base_map.data + 0x1FCu) == 0x464C4731u)
+	{
+		uint32_t prev_st_foff = read_u32(base_map.data + 0x1E4u);
+		uint32_t prev_st_size = read_u32(base_map.data + 0x1E8u);
+		if (prev_st_foff >= orig_tag_end && prev_st_foff <= base_map.file_size)
+		{
+			if (prev_st_size > 0 && prev_st_size < 262144u && prev_st_foff + prev_st_size <= base_map.file_size)
+			{
+				prev_state_text = (char *)malloc(prev_st_size + 1u);
+				if (prev_state_text)
+				{
+					char const *bm;
+					memcpy(prev_state_text, base_map.data + prev_st_foff, prev_st_size);
+					prev_state_text[prev_st_size] = '\0';
+					bm = strstr(prev_state_text, "Base Map: ");
+					if (bm)
+					{
+						size_t bi = 0;
+						bm += 10;
+						while (bm[bi] && bm[bi] != '\r' && bm[bi] != '\n' && bi + 1 < sizeof(base_map.map_name))
+						{
+							base_map.map_name[bi] = bm[bi];
+							bi++;
+						}
+						base_map.map_name[bi] = '\0';
+					}
+				}
+			}
+			if (prev_st_foff > orig_tag_end)
+			{
+				prev_media_size = prev_st_foff - orig_tag_end;
+				prev_media_buf = (uint8_t *)malloc(prev_media_size);
+				if (prev_media_buf)
+					memcpy(prev_media_buf, base_map.data + orig_tag_end, prev_media_size);
+			}
+			base_map.file_size = orig_tag_end;
+		}
+	}
 
 	buf_init(&extra_verts, 65536u);
 	buf_init(&extra_strips, 32768u);
@@ -5830,6 +6082,8 @@ int forge_export_scenario_map(
 		buf_free(&extra_verts);
 		buf_free(&extra_strips);
 		free(pending_objs);
+		free(prev_media_buf);
+		free(prev_state_text);
 		forge_source_map_close(&base_map);
 		return 0;
 	}
@@ -5879,6 +6133,95 @@ int forge_export_scenario_map(
 	buf_free(&extra_verts);
 	buf_free(&extra_strips);
 	scnr_foff = tag_data_offset + scnr_off;
+
+	if (prev_media_buf && prev_media_size > 0)
+	{
+		uint32_t prev_media_rel = buf_alloc(&s_cb_raw_media, prev_media_size, 32);
+		if (s_cb_raw_media.data)
+		{
+			memcpy(s_cb_raw_media.data + prev_media_rel, prev_media_buf, prev_media_size);
+			for (i = 0; i < base_map.tag_count; i++)
+			{
+				uint32_t io = tag_data_offset + 0x28u + (uint32_t)i * 32u;
+				uint32_t gtag, taddr, t_foff;
+				if (io + 32u > out.size || read_u32(out.data + io + 0x18u) != 0)
+					continue;
+				gtag = read_u32(out.data + io + 0x00u);
+				taddr = read_u32(out.data + io + 0x14u);
+				if (taddr < CE_TAG_BASE_ADDR)
+					continue;
+				t_foff = tag_data_offset + (taddr - CE_TAG_BASE_ADDR);
+				if (gtag == 0x6269746Du && t_foff + 0x6Cu <= out.size)
+				{
+					int32_t bd_cnt = read_s32(out.data + t_foff + 0x60u);
+					uint32_t bd_addr = read_u32(out.data + t_foff + 0x64u);
+					if (bd_cnt > 0 && bd_addr >= CE_TAG_BASE_ADDR)
+					{
+						uint32_t bd_arr = tag_data_offset + (bd_addr - CE_TAG_BASE_ADDR);
+						int32_t bi;
+						for (bi = 0; bi < bd_cnt && bd_arr + (uint32_t)(bi + 1) * 48u <= out.size; bi++)
+						{
+							uint32_t bd_foff = bd_arr + (uint32_t)bi * 48u;
+							uint16_t bflags = read_u16(out.data + bd_foff + 0x0Eu);
+							uint32_t px_off = read_u32(out.data + bd_foff + 0x18u);
+							if (!(bflags & (1u << 8)) && px_off >= orig_tag_end && px_off < orig_tag_end + prev_media_size &&
+								s_cb_media_patch_count < 4096)
+							{
+								s_cb_media_patches[s_cb_media_patch_count].field_foff = bd_foff + 0x18u;
+								s_cb_media_patches[s_cb_media_patch_count].media_rel_off = prev_media_rel + (px_off - orig_tag_end);
+								s_cb_media_patch_count++;
+							}
+						}
+					}
+				}
+				else if (gtag == 0x736E6421u && t_foff + 0xA4u <= out.size)
+				{
+					int32_t pr_cnt = read_s32(out.data + t_foff + 0x98u);
+					uint32_t pr_addr = read_u32(out.data + t_foff + 0x9Cu);
+					if (pr_cnt > 0 && pr_addr >= CE_TAG_BASE_ADDR)
+					{
+						uint32_t pr_arr = tag_data_offset + (pr_addr - CE_TAG_BASE_ADDR);
+						int32_t pri;
+						for (pri = 0; pri < pr_cnt && pr_arr + (uint32_t)(pri + 1) * 72u <= out.size; pri++)
+						{
+							uint32_t pr_foff = pr_arr + (uint32_t)pri * 72u;
+							int32_t pm_cnt = read_s32(out.data + pr_foff + 0x3Cu);
+							uint32_t pm_addr = read_u32(out.data + pr_foff + 0x40u);
+							if (pm_cnt > 0 && pm_addr >= CE_TAG_BASE_ADDR)
+							{
+								uint32_t pm_arr = tag_data_offset + (pm_addr - CE_TAG_BASE_ADDR);
+								int32_t pmi;
+								for (pmi = 0; pmi < pm_cnt && pm_arr + (uint32_t)(pmi + 1) * 124u <= out.size; pmi++)
+								{
+									uint32_t pm_foff = pm_arr + (uint32_t)pmi * 124u;
+									uint32_t ext_fl = read_u32(out.data + pm_foff + 0x44u + 4u);
+									uint32_t smp_off = read_u32(out.data + pm_foff + 0x44u + 8u);
+									if (!(ext_fl & 1u) && smp_off >= orig_tag_end && smp_off < orig_tag_end + prev_media_size &&
+										s_cb_media_patch_count < 4096)
+									{
+										s_cb_media_patches[s_cb_media_patch_count].field_foff = pm_foff + 0x44u + 8u;
+										s_cb_media_patches[s_cb_media_patch_count].media_rel_off = prev_media_rel + (smp_off - orig_tag_end);
+										s_cb_media_patch_count++;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if (prev_media_buf)
+	{
+		free(prev_media_buf);
+		prev_media_buf = NULL;
+	}
+	if (prev_state_text)
+	{
+		cb_undo_previous_flg1_edits(&out, tag_data_offset, scnr_foff, prev_state_text);
+		free(prev_state_text);
+		prev_state_text = NULL;
+	}
 
 	/* Relocate existing tag_instance name strings to the end of tag_data
 	 * to free contiguous 32-byte tag_instance slots after base_map.tag_count, then bake each object! */

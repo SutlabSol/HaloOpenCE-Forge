@@ -49,6 +49,11 @@
 #include "devices/device_light_fixtures.h"
 #include "forge_engine.h"
 
+#undef fopen
+#undef remove
+#define fopen(p, m) ((FILE *)forge_host_fopen((p), (m)))
+#define remove(p) forge_host_remove((p))
+
 extern unsigned long system_milliseconds(void);
 extern int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch);
 extern void platform_scoreboard_scroll(int open, long *notches, long *pages);
@@ -973,13 +978,13 @@ static void forge_ui_theme_load(int is_hot_reload)
 		sync_and_register_area_png(&s_ui_theme.areas[i], i);
 
 	snprintf(s_ui_theme.registered_map, sizeof(s_ui_theme.registered_map), "%s",
-		main_get_map_name() ? main_get_map_name() : "");
+		forge_get_active_map_name() ? forge_get_active_map_name() : "");
 	s_ui_theme.initialized = 1;
 }
 
 static void forge_ui_theme_ensure_loaded(void)
 {
-	char const *cur_map = main_get_map_name();
+	char const *cur_map = forge_get_active_map_name();
 	if (!s_ui_theme.initialized)
 	{
 		forge_ui_theme_load(0);
@@ -4313,7 +4318,7 @@ void forge_3d_update(float dt)
 		s_save_modal_just_opened = 1;
 	s_prev_modal = g_forge.active_modal;
 
-	if (main_get_map_name() && strcmp(main_get_map_name(), "levels\\ui\\ui") == 0)
+	if (forge_get_active_map_name() && strcmp(forge_get_active_map_name(), "levels\\ui\\ui") == 0)
 		return;
 	scen = global_scenario_get();
 	if (!scen || scen->type == 2 /* _scenario_type_main_menu */)
@@ -4330,7 +4335,7 @@ void forge_3d_update(float dt)
 		{
 			/* When playing a saved Forge map in normal Multiplayer / Splitscreen outside Forge mode,
 			 * still load any non-baked or AI objects from [ForgeState] once on map load! */
-			forge_load_saved_map_state_if_present(main_get_map_name());
+			forge_load_saved_map_state_if_present(forge_get_active_map_name());
 		}
 	}
 
@@ -4387,7 +4392,7 @@ void forge_3d_update(float dt)
 			g_forge.mode = _forge_mode_play; /* Spawn as Spartan at default player spawn */
 			forge_network_reset_session();
 			forge_init_map_scenario_entities();
-			forge_load_saved_map_state_if_present(main_get_map_name());
+			forge_load_saved_map_state_if_present(forge_get_active_map_name());
 			forge_set_status("%s Forge/Spartan   %s Quick Save",
 				forge_action_prompt(FORGE_BIND_TOGGLE_MODE),
 				forge_action_prompt(FORGE_BIND_QUICK_SAVE));
@@ -4400,7 +4405,7 @@ void forge_3d_update(float dt)
 	else if (g_forge.live_instance_count == 0 && (scen->players.count > 0 || scen->netgame_flags.count > 0))
 	{
 		forge_init_map_scenario_entities();
-		forge_load_saved_map_state_if_present(main_get_map_name());
+		forge_load_saved_map_state_if_present(forge_get_active_map_name());
 	}
 
 	/* Run collaborative multiplayer sync (late-join state sync, client object adoption, Monitor state heartbeat) */
