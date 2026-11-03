@@ -2064,6 +2064,13 @@ static void forge_ensure_local_tag_cache_built(void)
 	{
 		int extracted_total = forge_rip_maps_folder_to_cached_tags("maps");
 		if (extracted_total <= 0)
+		{
+			char translated_maps[1024];
+			platform_translate_path("d:\\maps", translated_maps, sizeof(translated_maps));
+			if (translated_maps[0] && _stricmp(translated_maps, "maps") != 0)
+				extracted_total = forge_rip_maps_folder_to_cached_tags(translated_maps);
+		}
+		if (extracted_total <= 0)
 			extracted_total = forge_rip_maps_folder_to_cached_tags("assets/maps");
 		if (extracted_total <= 0)
 			extracted_total = forge_rip_maps_folder_to_cached_tags("../assets/maps");
@@ -2656,7 +2663,7 @@ static void patch_light_definition_buffer(uint8_t *lbuf)
 static void patch_forge_device_and_light_tag_runtime(long tag_idx, uint32_t grp, char const *tag_path)
 {
 	uint8_t *obuf;
-	int32_t att_cnt, a;
+	int32_t att_cnt, a, model_idx;
 	uint8_t *att_base;
 
 	(void)tag_path;
@@ -2669,11 +2676,87 @@ static void patch_forge_device_and_light_tag_runtime(long tag_idx, uint32_t grp,
 	if (!obuf)
 		return;
 
-	/* Ensure point lights and fixtures have a non-zero bounding radius so Forge raycasting and visibility work */
-	if (*(float const *)(obuf + 0x04u) < 0.45f)
-		*(float *)(obuf + 0x04u) = 0.45f;
-	if (*(float const *)(obuf + 0x104u) < 1.5f)
-		*(float *)(obuf + 0x104u) = 1.5f;
+	/* Ensure scenery, devices, and light fixtures have generous bounding and render radii so Forge raycasting
+	 * and long-distance frustum/LOD visibility never cull custom scenery early */
+	if (*(float const *)(obuf + 0x04u) < 1.5f)
+		*(float *)(obuf + 0x04u) = 1.5f;
+	if (*(float const *)(obuf + 0x104u) < 8.0f)
+		*(float *)(obuf + 0x104u) = 8.0f;
+	if (*(float const *)(obuf + 0x104u) < *(float const *)(obuf + 0x04u) * 2.0f)
+		*(float *)(obuf + 0x104u) = *(float const *)(obuf + 0x04u) * 2.0f;
+
+	/* Patch the object's model ('mode'/'mod2') LOD cutoffs and permutation geometry_indices[0..4]
+	 * so custom scenery items with missing low-LOD geometries or positive super_low pixel cutoffs
+	 * render across the entire map just like base-game scenery! */
+	model_idx = *(int32_t const *)(obuf + 0x34u);
+	if (model_idx != NONE)
+	{
+		uint8_t *mbuf = (uint8_t *)tag_get('mode', model_idx);
+		if (!mbuf)
+			mbuf = (uint8_t *)tag_get('mod2', model_idx);
+		if (mbuf)
+		{
+			float *cutoffs = (float *)(mbuf + 0x08u);
+			int32_t reg_cnt = *(int32_t const *)(mbuf + 0xC4u);
+			uint8_t *reg_base = *(uint8_t *const *)(mbuf + 0xC8u);
+			int32_t geom_cnt = *(int32_t const *)(mbuf + 0xD0u);
+			uint8_t *geom_base = *(uint8_t *const *)(mbuf + 0xD4u);
+			int32_t r, p, lv;
+
+			if (cutoffs[0] > cutoffs[4] && cutoffs[4] >= 0.0f)
+			{
+				float t0 = cutoffs[0], t1 = cutoffs[1];
+				cutoffs[0] = cutoffs[4];
+				cutoffs[1] = cutoffs[3];
+				cutoffs[3] = t1;
+				cutoffs[4] = t0;
+			}
+			cutoffs[0] = 0.0f; /* Never cull at super_low distance (models.c:1000) */
+
+			if (reg_cnt > 0 && reg_cnt <= 32 && reg_base && geom_cnt > 0 && geom_base)
+			{
+				for (r = 0; r < reg_cnt; r++)
+				{
+					uint8_t *reg = reg_base + (size_t)r * 76u;
+					int32_t perm_cnt = *(int32_t const *)(reg + 0x40u);
+					uint8_t *perm_base = *(uint8_t *const *)(reg + 0x44u);
+					if (perm_cnt <= 0 || perm_cnt > 32 || !perm_base)
+						continue;
+					for (p = 0; p < perm_cnt; p++)
+					{
+						uint8_t *perm = perm_base + (size_t)p * 88u;
+						int16_t *g_indices = (int16_t *)(perm + 0x40u);
+						int16_t best_g = -1;
+						for (lv = 4; lv >= 0; lv--)
+						{
+							int16_t gi = g_indices[lv];
+							if (gi >= 0 && gi < (int16_t)geom_cnt)
+							{
+								int32_t part_cnt = *(int32_t const *)(geom_base + (size_t)gi * 48u + 36u);
+								if (part_cnt > 0)
+								{
+									best_g = gi;
+									break;
+								}
+							}
+						}
+						if (best_g >= 0)
+						{
+							for (lv = 0; lv < 5; lv++)
+							{
+								int16_t gi = g_indices[lv];
+								if (gi < 0 || gi >= (int16_t)geom_cnt ||
+									*(int32_t const *)(geom_base + (size_t)gi * 48u + 36u) <= 0)
+								{
+									g_indices[lv] = best_g;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 
 	if (grp == 'mach' && tag_path &&
 		(_stricmp(tag_path, "levels\\a30\\devices\\beam emitter\\beam emitter") == 0 ||
@@ -7218,7 +7301,7 @@ void forge_load_saved_map_state_if_present(char const *map_name)
 	if (!map_name || !map_name[0])
 		return;
 
-	/* Patch any baked vehicles in the loaded map so their driver seats and bounding-sphere entrance flags work in MP & Forge */
+	/* Patch any baked vehicles and custom scenery/devices/lights in the loaded map so vehicle seats and long-distance LOD rendering work */
 	{
 		long tag_cnt = 0, ti;
 		struct forge_cache_file_tag_instance *instances =
@@ -7227,13 +7310,47 @@ void forge_load_saved_map_state_if_present(char const *map_name)
 		{
 			for (ti = 0; ti < tag_cnt; ti++)
 			{
-				if (instances[ti].group_tag == 'vehi' && instances[ti].base_address)
+				uint32_t g = (uint32_t)instances[ti].group_tag;
+				if (!instances[ti].base_address)
+					continue;
+				if (g == 'vehi')
 					patch_vehicle_tag_for_player_driving(instances[ti].tag_index, instances[ti].name);
+				else if (g == 'scen' || g == 'mach' || g == 'lifi' || g == 'ctrl')
+					patch_forge_device_and_light_tag_runtime(instances[ti].tag_index, g, instances[ti].name);
+			}
+		}
+		if (object_header_data)
+		{
+			unsigned long scen_mask =
+				_object_mask_scenery |
+				_object_mask_machine |
+				_object_mask_control |
+				_object_mask_light_fixture;
+			long o_idx;
+			for (o_idx = data_next_index(object_header_data, NONE);
+				 o_idx != NONE;
+				 o_idx = data_next_index(object_header_data, o_idx))
+			{
+				struct object_datum *obj = (struct object_datum *)object_try_and_get_and_verify_type(o_idx, scen_mask);
+				if (obj && obj->definition_index != NONE)
+				{
+					uint8_t const *obuf = (uint8_t const *)object_definition_get(obj->definition_index);
+					if (obuf)
+					{
+						float def_br = *(float const *)(obuf + 0x04u);
+						if (obj->object.bounding_sphere_radius < def_br)
+							obj->object.bounding_sphere_radius = def_br;
+					}
+				}
 			}
 		}
 	}
 	if (g_forge.initialized)
 		forge_runtime_reload_catalogs();
+
+	/* Clients receive the live Forge object state from the Host via !FH: / !FM: / !FD: packets */
+	if (game_connection() == _game_connection_network_client)
+		return;
 
 	slash = strrchr(map_name, '\\');
 	if (!slash)

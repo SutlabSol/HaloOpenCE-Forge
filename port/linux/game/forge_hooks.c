@@ -16,6 +16,7 @@
 #include "main/main.h"
 #include "main/console.h"
 #include "models/models.h"
+#include "models/model_definitions.h"
 #include "render/render.h"
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
@@ -2703,6 +2704,7 @@ static void forge_reset_transient_session_state(int clear_saved_map_state)
 	g_forge.hovered_object_index = NONE;
 	g_forge.hovered_live_index = -1;
 	g_forge.hovered_object_label[0] = 0;
+	forge_3d_reset_session_tracking();
 	if (clear_saved_map_state)
 	{
 		g_forge.live_instance_count = 0;
@@ -2745,12 +2747,25 @@ void network_chat_update(void)
 		return;
 	}
 
-	/* Reset per-map monitor state when switching maps */
-	if (cur_map && strcmp(cur_map, g_last_forge_map_name) != 0)
+	/* Auto-enable g_forge_session_enabled if we joined a Forge game via standard Join Game */
+	if (!g_forge_session_enabled)
 	{
+		struct game_variant const *v = game_engine_get_variant();
+		if (v && (_wcsicmp(v->human_readable_game_description, L"Forge") == 0 ||
+				  v->universal_variant.score_to_win == 0x3FFFFFFF))
+		{
+			g_forge_session_enabled = 1;
+		}
+	}
+
+	/* Reset per-map monitor state only when switching between different active maps */
+	if (cur_map && cur_map[0] && _stricmp(cur_map, g_last_forge_map_name) != 0)
+	{
+		int had_previous_map = (g_last_forge_map_name[0] != 0);
 		snprintf(g_last_forge_map_name, sizeof(g_last_forge_map_name), "%s", cur_map);
 		g_forge.active_modal = _forge_modal_none;
-		forge_reset_transient_session_state(1);
+		if (had_previous_map)
+			forge_reset_transient_session_state(1);
 	}
 
 	if (g_last_forge_frame_ms != 0)
@@ -2987,6 +3002,28 @@ void render_model(
 		}
 	}
 
+	/* Ensure custom scenery/device models inside .map files never disappear at distance due to
+	 * non-zero super_low detail_cutoff_pixels[0] or missing low-LOD permutation geometry_indices */
+	if (unique_identifier != NONE && model_index != NONE)
+	{
+		struct object_datum *scen_obj = (struct object_datum *)object_try_and_get_and_verify_type(
+			unique_identifier,
+			_object_mask_scenery | _object_mask_machine | _object_mask_light_fixture | _object_mask_control);
+		if (scen_obj)
+		{
+			struct model *m = model_definition_get(model_index);
+			if (m)
+			{
+				if (m->detail_cutoff_pixels[0] > 0.0f)
+					m->detail_cutoff_pixels[0] = 0.0f;
+				if (m->geometries.count <= 1 && level_of_detail_pixels < m->detail_cutoff_pixels[4] + 1.0f)
+					level_of_detail_pixels = m->detail_cutoff_pixels[4] + 1.0f;
+				if (level_of_detail_pixels < 32.0f)
+					level_of_detail_pixels = 32.0f;
+			}
+		}
+	}
+
 	orig_render_model(
 		model_index,
 		level_of_detail_pixels,
@@ -3137,14 +3174,26 @@ void menu_tags_loaded(char const *map_name)
 	s_save_forge_btn_tag = NONE;
 	g_last_forge_map_name[0] = 0;
 	g_forge.live_instance_count = 0;
-	forge_reset_transient_session_state(0);
 
 	if (map_name && (_stricmp(map_name, "ui") == 0 || _stricmp(map_name, "levels\\ui\\ui") == 0))
 	{
+		forge_reset_transient_session_state(0);
 		g_forge_session_enabled = 0;
 		g_forge.mode = _forge_mode_play;
 		g_forge.active_modal = _forge_modal_none;
 		forge_menu_custom_edition_maps_look_again();
+	}
+	else
+	{
+		struct game_variant const *v = game_engine_get_variant();
+		if (!g_forge_session_enabled && v &&
+			(_wcsicmp(v->human_readable_game_description, L"Forge") == 0 ||
+			 v->universal_variant.score_to_win == 0x3FFFFFFF))
+		{
+			g_forge_session_enabled = 1;
+		}
+		forge_reset_transient_session_state(1);
+		snprintf(g_last_forge_map_name, sizeof(g_last_forge_map_name), "%s", forge_get_active_map_name());
 	}
 
 	forge_normalize_mcc_hud_tags();

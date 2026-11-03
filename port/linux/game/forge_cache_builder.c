@@ -2352,6 +2352,47 @@ static int32_t out_map_bake_ocetags_package(
 				}
 			}
 			write_u32(out->data + pt->def_foff + 0x00u, read_u32(out->data + pt->def_foff + 0x00u) & ~0x02u); /* clear _gbxmodel_parts_have_local_nodes_bit */
+			write_f32(out->data + pt->def_foff + 0x08u, 0.0f); /* super_low detail_cutoff_pixels[0] = 0.0f */
+			{
+				int32_t reg_cnt = read_s32(out->data + pt->def_foff + 0xC4u);
+				uint32_t reg_addr = read_u32(out->data + pt->def_foff + 0xC8u);
+				int r_idx, pm_idx, lv;
+				if (reg_cnt > 0 && reg_cnt <= 32 && reg_addr >= CE_TAG_BASE_ADDR && geom_cnt > 0)
+				{
+					uint32_t reg_base = tag_data_offset + (reg_addr - CE_TAG_BASE_ADDR);
+					for (r_idx = 0; r_idx < reg_cnt; r_idx++)
+					{
+						uint32_t r_foff = reg_base + (uint32_t)r_idx * 76u;
+						int32_t pm_cnt = read_s32(out->data + r_foff + 0x40u);
+						uint32_t pm_addr = read_u32(out->data + r_foff + 0x44u);
+						if (pm_cnt <= 0 || pm_cnt > 32 || pm_addr < CE_TAG_BASE_ADDR)
+							continue;
+						for (pm_idx = 0; pm_idx < pm_cnt; pm_idx++)
+						{
+							uint32_t pm_foff = tag_data_offset + (pm_addr - CE_TAG_BASE_ADDR) + (uint32_t)pm_idx * 88u;
+							int16_t best_g = -1;
+							for (lv = 4; lv >= 0; lv--)
+							{
+								int16_t gi = read_s16(out->data + pm_foff + 0x40u + (uint32_t)lv * 2u);
+								if (gi >= 0 && gi < (int16_t)geom_cnt)
+								{
+									best_g = gi;
+									break;
+								}
+							}
+							if (best_g >= 0)
+							{
+								for (lv = 0; lv < 5; lv++)
+								{
+									int16_t gi = read_s16(out->data + pm_foff + 0x40u + (uint32_t)lv * 2u);
+									if (gi < 0 || gi >= (int16_t)geom_cnt)
+										write_s16(out->data + pm_foff + 0x40u + (uint32_t)lv * 2u, best_g);
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 		else if (pt->fourcc == 'coll' && pt->raw_len >= 0x298u)
 		{
@@ -2411,6 +2452,13 @@ static int32_t out_map_bake_ocetags_package(
 					}
 				}
 			}
+		}
+		else if ((pt->fourcc == 'scen' || pt->fourcc == 'lifi' || pt->fourcc == 'mach') && pt->raw_len >= 0x17Cu)
+		{
+			if (read_f32(out->data + pt->def_foff + 0x04u) < 1.5f)
+				write_f32(out->data + pt->def_foff + 0x04u, 1.5f);
+			if (read_f32(out->data + pt->def_foff + 0x104u) < 8.0f)
+				write_f32(out->data + pt->def_foff + 0x104u, 8.0f);
 		}
 		else if (pt->fourcc == 'vehi' && pt->raw_len >= 0x3F0u)
 		{
@@ -3165,7 +3213,7 @@ static int32_t out_map_bake_faber_vault_bundle(
 			if (rad < 4.5f)
 				write_f32(out->data + def_foff + 0x04u, 4.5f);
 		}
-		else if ((ft->fourcc == 'scen' || ft->fourcc == 'lifi' || ft->fourcc == 'mach') && ft->root_sz >= 0x17Cu)
+		else if ((ft->fourcc == 'scen' || ft->fourcc == 'lifi' || ft->fourcc == 'mach') && ft->root_sz >= 0x17Cu) { if (read_f32(out->data + def_foff + 0x04u) < 1.5f) write_f32(out->data + def_foff + 0x04u, 1.5f); if (read_f32(out->data + def_foff + 0x104u) < 8.0f) write_f32(out->data + def_foff + 0x104u, 8.0f); } else if (0)
 		{
 			if (read_f32(out->data + def_foff + 0x04u) < 0.45f)
 				write_f32(out->data + def_foff + 0x04u, 0.45f);
@@ -4762,7 +4810,7 @@ static int32_t out_map_bake_xbox_tag_closure(
 				}
 			}
 		}
-		else if (xt->fourcc == 'scen' || xt->fourcc == 'lifi')
+		else if (xt->fourcc == 'scen' || xt->fourcc == 'lifi') { if (read_f32(out->data + xt->def_foff + 0x04u) < 1.5f) write_f32(out->data + xt->def_foff + 0x04u, 1.5f); if (read_f32(out->data + xt->def_foff + 0x104u) < 8.0f) write_f32(out->data + xt->def_foff + 0x104u, 8.0f); } else if (0)
 		{
 			if (read_f32(out->data + xt->def_foff + 0x04u) < 0.45f)
 				write_f32(out->data + xt->def_foff + 0x04u, 0.45f);
@@ -4772,6 +4820,10 @@ static int32_t out_map_bake_xbox_tag_closure(
 		else if (xt->fourcc == 'mach')
 		{
 			int16_t mtype = read_s16(out->data + xt->def_foff + 0x290u);
+			if (read_f32(out->data + xt->def_foff + 0x04u) < 1.5f)
+				write_f32(out->data + xt->def_foff + 0x04u, 1.5f);
+			if (read_f32(out->data + xt->def_foff + 0x104u) < 8.0f)
+				write_f32(out->data + xt->def_foff + 0x104u, 8.0f);
 			if (read_f32(out->data + xt->def_foff + 0x04u) < 0.45f)
 				write_f32(out->data + xt->def_foff + 0x04u, 0.45f);
 			if (read_f32(out->data + xt->def_foff + 0x104u) < 1.5f)
