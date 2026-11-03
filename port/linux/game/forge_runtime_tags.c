@@ -168,7 +168,7 @@ int forge_host_remove(char const *path)
 char const *forge_get_active_map_name(void)
 {
 	static char s_active_map[256];
-	struct scenario *scen = global_scenario_get();
+	struct scenario *scen = global_scenario_try_and_get();
 	char const *ce_loaded;
 	char const *loaded_leaf;
 	char const *mp_map;
@@ -1290,7 +1290,7 @@ static void scan_loaded_map_into_catalog(void)
 	{
 		return;
 	}
-	scen = global_scenario_get();
+	scen = global_scenario_try_and_get();
 	if (!scen || scen->type == 2 /* _scenario_type_main_menu */)
 		return;
 

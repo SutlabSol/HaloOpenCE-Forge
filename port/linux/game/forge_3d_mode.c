@@ -2102,7 +2102,7 @@ static int s_orig_nf_count = 0;
  * AND into g_forge.edit_state.player_spawns so Red/Blue/FFA player spawns work live and save cleanly. */
 static void sync_live_player_spawns_to_scenario(void)
 {
-	struct scenario *scen = global_scenario_get();
+	struct scenario *scen = global_scenario_try_and_get();
 	int i, out_count = 0;
 
 	g_forge.edit_state.replace_player_spawns = 1;
@@ -2203,7 +2203,7 @@ static void sync_live_player_spawns_to_scenario(void)
  * AND into g_forge.edit_state.netgame_flags so teleporters and KOTH/Oddball/Race/CTF markers work live and save cleanly. */
 static void sync_live_netgame_flags_to_scenario(void)
 {
-	struct scenario *scen = global_scenario_get();
+	struct scenario *scen = global_scenario_try_and_get();
 	int i, out_count = 0;
 
 	g_forge.edit_state.replace_netgame_flags = 1;
@@ -3026,7 +3026,7 @@ static void update_save_modal_input(void)
 
 static int find_valid_bsp_spawn_point(real_point3d *out_pos, float *out_yaw)
 {
-	struct scenario *scen = global_scenario_get();
+	struct scenario *scen = global_scenario_try_and_get();
 	long i;
 
 	if (!scen)
@@ -3094,7 +3094,7 @@ static int find_valid_bsp_spawn_point(real_point3d *out_pos, float *out_yaw)
 
 void forge_init_map_scenario_entities(void)
 {
-	struct scenario *scen = global_scenario_get();
+	struct scenario *scen = global_scenario_try_and_get();
 	long i;
 
 	if (!scen)
@@ -4277,7 +4277,7 @@ static void forge_reconcile_live_instances(void)
 	static struct scenario *s_last_tick_scen = NULL;
 	static long s_last_unit_index = NONE;
 	static int s_last_forge_mode = -1;
-	struct scenario *scen = global_scenario_get();
+	struct scenario *scen = global_scenario_try_and_get();
 	long cur_tick = game_time_get();
 	long cur_unit = player_control_get_unit_index(0);
 	int reverted = 0;
@@ -4508,7 +4508,7 @@ void forge_3d_update(float dt)
 		forge_3d_reset_session_tracking();
 		return;
 	}
-	scen = global_scenario_get();
+	scen = global_scenario_try_and_get();
 	if (!scen || scen->type == 2 /* _scenario_type_main_menu */)
 	{
 		forge_3d_reset_session_tracking();
