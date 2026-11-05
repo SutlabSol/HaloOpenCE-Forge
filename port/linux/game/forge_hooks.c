@@ -3396,7 +3396,7 @@ void menu_tags_loaded(char const *map_name)
 		}
 	}
 
-	/* Ensure local tag cache and .ocetags packages are extracted and loaded when in a Forge session */
+	/* Ensure local tag cache is extracted and loaded when in a Forge session */
 	if (g_forge_session_enabled)
 		forge_runtime_init();
 }
@@ -3909,6 +3909,11 @@ extern wchar_t const *game_modes_variant_kind_name(struct game_variant const *va
 
 byte forge_game_modes_kind(struct game_variant const *variant, struct game_variant_options const *options)
 {
+	if (variant && (_wcsicmp(variant->human_readable_game_description, L"Forge") == 0 ||
+					variant->universal_variant.score_to_win == 0x3FFFFFFF))
+	{
+		g_forge_session_enabled = 1;
+	}
 	if (g_forge_session_enabled ||
 		(variant && _wcsicmp(variant->human_readable_game_description, L"Forge") == 0))
 	{
@@ -3926,6 +3931,11 @@ wchar_t const *forge_game_modes_kind_name(long game_engine_index, byte kind, boo
 
 wchar_t const *forge_game_modes_variant_kind_name(struct game_variant const *variant, struct game_variant_options const *options)
 {
+	if (variant && (_wcsicmp(variant->human_readable_game_description, L"Forge") == 0 ||
+					variant->universal_variant.score_to_win == 0x3FFFFFFF))
+	{
+		g_forge_session_enabled = 1;
+	}
 	if (g_forge_session_enabled ||
 		(variant && _wcsicmp(variant->human_readable_game_description, L"Forge") == 0))
 	{

@@ -3422,7 +3422,7 @@ static void format_clean_uppercase_item_name(char const *display_name, char *out
 	size_t i = 0;
 	if (!out_buf || out_sz == 0)
 		return;
-	/* Preserve "[c] " custom .ocetags badge and "[map] " map-local tag badge while stripping generic "[WEAP] ", "[VEHI] ", "[SPAWN] ", "[KOTH] " prefixes */
+	/* Preserve "[c] " custom tag cache badge and "[map] " map-local tag badge while stripping generic "[WEAP] ", "[VEHI] ", "[SPAWN] ", "[KOTH] " prefixes */
 	if (_strnicmp(p, "[c]", 3) == 0)
 	{
 		p += 3;

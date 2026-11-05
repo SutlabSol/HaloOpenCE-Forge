@@ -4,7 +4,7 @@
  * - Bidirectional Spawn (!FS: / !FH:), Transform (!FM:), and Delete (!FD:) replication
  * - Per-Player Monitor vs. Spartan mode & 3D Monitor flight state synchronization (!FT:)
  * - Late-join / full-session state synchronization (!FQ)
- * - Automatic client-side external tag & .ocetags faulting on object creation
+ * - Automatic client-side external tag faulting on object creation
  */
 
 #ifndef HALO_RELEASE
@@ -832,7 +832,7 @@ static void forge_client_handle_host_spawn(
 	actual_grp = ce->group_tag;
 	if (ce->group_tag != 'spwn' && ce->group_tag != 'tele' && ce->group_tag != 'flag')
 	{
-		/* Fault in external Xbox campaign tags or .ocetags packages on the client before object creation! */
+		/* Fault in external Xbox campaign tags or cached tag bundles on the client before object creation! */
 		def_idx = forge_resolve_engine_tag(ce->group_tag, ce->tag_path, &actual_grp);
 	}
 
