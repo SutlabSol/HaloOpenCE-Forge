@@ -84,9 +84,6 @@ symbols in this file:
 
 /* ---------- headers */
 
-#ifndef HALO_RELEASE
-#define HALO_RELEASE /* port: carry on past assertions skipped by display_assert */
-#endif
 #include "cseries.h"
 #include "cseries_windows.h"
 #include "errors.h"
