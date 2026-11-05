@@ -651,12 +651,12 @@ static char *profile_text(const struct tag_profile *profile)
 		MAXIMUM_FILE_NAME_LENGTH + TAG_OPTION_COUNT * MAXIMUM_OPTION_LENGTH) * TOML_CHARACTER_LENGTH);
 	char *text;
 	long index;
+	int format = TAG_PROFILES_BUNDLES_FORMAT;
 
 	/* (and its tags' edits, each a line) */
 	for (index = 0; index < profile->tag_count; index++)
 		capacity += 32 + (size_t)profile->tags[index].edit_count * (MAXIMUM_EDIT_KEY_LENGTH + 40);
 	text = malloc(capacity);
-	int format = TAG_PROFILES_BUNDLES_FORMAT;
 
 	if (!text)
 		return NULL;
