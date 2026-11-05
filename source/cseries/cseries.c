@@ -132,9 +132,6 @@ symbols in this file:
 /* ---------- headers */
 
 #define BUILDING_CSERIES
-#ifndef HALO_RELEASE
-#define HALO_RELEASE /* port: log failed assertions and carry on past system_exit(-1) */
-#endif
 
 #include <wchar.h>
 
