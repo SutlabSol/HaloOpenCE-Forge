@@ -34,8 +34,8 @@ Rather than shipping as a separate standalone addon binary with stripped menus, 
 - **Unified `SELECT GAMEMODE` Multiplayer Hub:** Selecting **Multiplayer** on the main menu opens the **Select Gamemode** screen with two modes and live right-panel artwork/descriptions:
   - **STANDARD:** Normal OpenCE Multiplayer (Internet Server Browser, LAN, Split-Screen, Create Game).
   - **FORGE:** Opens the dedicated Forge Hub (**Solo Forge**, **Multiplayer Forge**, **Edit Maps**, and **Tag Options**).
-- **Compressed `.ocetags` Cache (`OCEZ`) & 122 MB Map Support:** All extracted stock and custom tags are stored using `zlib` stream compression (`OCEZ`) with a deduplicated binary manifest (`manifest.bin`), minimizing disk footprint while supporting a **512 MB contiguous memory window** and **122 MB map/tag cache limit**.
-- **Standalone `.map` Tag Injection & Baking (`v2.1.0`):** Maps forged and saved (`F5` or `Pause -> SAVE MAP..`) inject and bake all placed objects, spawns, objectives, and imported custom/campaign tags (from Faber Tag Vault `.fbrtag` / `faber_vault.bin`, decompressed Xbox donor caches, `.fxtg` bundles, and `.ocetags` packages) directly into a standalone Halo Custom Edition `.map` file in `custom_maps/` so forged maps play natively in Standard Mode Multiplayer without external tag files.
+- **Compressed Tag Cache & 122 MB Map Support:** All extracted stock and custom tags pulled from maps are stored using `zlib` stream compression with a deduplicated binary manifest, minimizing disk footprint while supporting a **512 MB contiguous memory window** and **122 MB map/tag cache limit**.
+- **Standalone `.map` Tag Injection & Baking (`v2.1.0`):** Maps forged and saved (`F5` or `Pause -> SAVE MAP..`) inject and bake all placed objects, spawns, objectives, and imported custom/campaign tags (from Faber Tag Vault `.fbrtag` / `faber_vault.bin`, decompressed Xbox donor caches, and `.fxtg` bundles) directly into a standalone Halo Custom Edition `.map` file in `custom_maps/` so forged maps play natively in Standard Mode Multiplayer without external tag files.
 
 > [!IMPORTANT]
 > **No proprietary game maps or copyrighted assets are included in this repository or its releases.** You must provide your own Halo: Combat Evolved `maps/` (or Xbox `.iso` / `.xiso` disc image) and optional Halo Custom Edition `custom_maps/` (`bitmaps.map`, `sounds.map`, `loc.map`). On first launch, `halo.exe` builds your local compressed tag cache in `OpenCE Forge/cached_tags/` directly from your own maps.
@@ -77,7 +77,7 @@ Navigating to **`MULTIPLAYER -> FORGE`** opens the Forge Hub:
 - **Visual Map Spawns & 3D Objective Markers:**
   - Existing map spawns and netgame flags (`Player Spawns`, `CTF Flags`, `Oddball Spawns`, `King of the Hill` with 3D boundary beams, `Race Track Points`, and `Teleporters` with working runtime pass-through collision) render as 3D translucent markers in Monitor Mode and can be moved, rotated, deleted, or configured via **`X` (Object Properties)**.
 - **Collaborative Multiplayer Forge (`!FT:`, `!FS:`, `!FH:`, `!FM:`, `!FD:`, `!FQ`):**
-  - Remote Monitors interpolate smoothly at 20 Hz, automatically eject seated vehicle passengers when grabbed, wake vehicle physics on placement, and fault in external/custom `.ocetags` definitions on the fly for all connected clients.
+  - Remote Monitors interpolate smoothly at 20 Hz, automatically eject seated vehicle passengers when grabbed, wake vehicle physics on placement, and fault in external/custom cached tag definitions on the fly for all connected clients.
 
 ---
 

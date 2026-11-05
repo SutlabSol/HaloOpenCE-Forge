@@ -3396,7 +3396,7 @@ void menu_tags_loaded(char const *map_name)
 		}
 	}
 
-	/* Ensure local tag cache and .ocetags packages are extracted and loaded when in a Forge session */
+	/* Ensure local tag cache is extracted and loaded when in a Forge session */
 	if (g_forge_session_enabled)
 		forge_runtime_init();
 }
