@@ -2196,7 +2196,7 @@ static void effect_update(
 		struct object_datum *parent;
 		long parent_object_index;
 
-		if (!object)
+		if (!object || TEST_FLAG(object_header_get(effect->object_index)->flags, _object_header_being_deleted_bit))
 		{
 			effect_delete(effect_index);
 
