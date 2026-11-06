@@ -5437,7 +5437,34 @@ int forge_export_scenario_map(
 	free(pending_objs);
 
 	snprintf(map_path, sizeof(map_path), "custom_maps/%s.map", output_map_name);
-	/* Remove any legacy external .bmp / .txt / sidecar files for this map */
+	{
+		char tmp_map_path[520];
+		snprintf(tmp_map_path, sizeof(tmp_map_path), "%s.tmp", map_path);
+		f = fopen(tmp_map_path, "wb");
+		if (!f)
+		{
+			buf_free(&out);
+			forge_source_map_close(&base_map);
+			return 0;
+		}
+		if (fwrite(out.data, 1, out.size, f) != out.size)
+		{
+			fclose(f);
+			remove(tmp_map_path);
+			buf_free(&out);
+			forge_source_map_close(&base_map);
+			return 0;
+		}
+		fclose(f);
+		if (forge_host_rename(tmp_map_path, map_path) != 0)
+		{
+			remove(tmp_map_path);
+			buf_free(&out);
+			forge_source_map_close(&base_map);
+			return 0;
+		}
+	}
+	/* Remove any legacy external .bmp / .txt / sidecar files for this map once the new .map is safely in place */
 	{
 		char legacy_path[512];
 		snprintf(legacy_path, sizeof(legacy_path), "custom_maps/%s.bmp", output_map_name);
@@ -5452,21 +5479,6 @@ int forge_export_scenario_map(
 		remove(legacy_path);
 	}
 
-	f = fopen(map_path, "wb");
-	if (!f)
-	{
-		buf_free(&out);
-		forge_source_map_close(&base_map);
-		return 0;
-	}
-	if (fwrite(out.data, 1, out.size, f) != out.size)
-	{
-		fclose(f);
-		buf_free(&out);
-		forge_source_map_close(&base_map);
-		return 0;
-	}
-	fclose(f);
 	buf_free(&out);
 	forge_source_map_close(&base_map);
 	return 1;

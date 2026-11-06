@@ -190,7 +190,7 @@ struct forge_catalog_entry const *forge_find_catalog_entry_by_hash(uint32_t hash
 	return NULL;
 }
 
-static void forge_send_packet_to_host(char const *text)
+void forge_send_packet_to_host(char const *text)
 {
 	struct forge_chat_packet pkt;
 	if (!text || !text[0])
@@ -527,6 +527,8 @@ void forge_network_sync_tick(void)
 				g_host_machine_sync_cursor[m] = -1;
 		}
 	}
+
+	forge_server_autosave_tick();
 }
 
 void forge_network_send_spawn_ext(
@@ -1193,9 +1195,15 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 		return 1;
 	}
 
-	/* 3. Client -> Host Packets (!FS:, !FM:, !FD:) */
+	/* 3. Client -> Host Packets (!FS:, !FM:, !FD:, !FW) */
 	if (is_from_client_to_host && game_connection() == _game_connection_network_server)
 	{
+		if (strncmp(text, "!FW", 3) == 0)
+		{
+			forge_server_mark_dirty();
+			forge_server_save_map_if_dirty(1);
+			return 1;
+		}
 		if (strncmp(text, "!FS:", 4) == 0)
 		{
 			unsigned int hash = 0;
@@ -1217,6 +1225,7 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 						(float)roll_cr / 100.0f,
 						(int16_t)team,
 						1);
+					forge_server_mark_dirty();
 				}
 			}
 			return 1;
@@ -1249,6 +1258,7 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 						(float)roll_cr / 100.0f,
 						(n >= 9) ? is_held : 0,
 						0);
+					forge_server_mark_dirty();
 					snprintf(
 						relay,
 						sizeof(relay),
@@ -1296,6 +1306,7 @@ int forge_network_intercept_chat_packet(long machine_index, char const *text, in
 						g_net_obj_is_held[host_obj_abs] = 0;
 					}
 					forge_3d_delete_instance(target_idx, 0);
+					forge_server_mark_dirty();
 					snprintf(relay, sizeof(relay), "!FD:%d:%d", (int)target_idx, host_obj_abs);
 					forge_broadcast_packet_to_clients(relay, machine_index);
 				}

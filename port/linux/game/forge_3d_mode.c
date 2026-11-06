@@ -4569,9 +4569,21 @@ void forge_3d_update(float dt)
 				}
 			}
 		}
-		else if (s_init_wait_ticks >= 4 && find_valid_bsp_spawn_point(&spawn_pos, &spawn_yaw))
+		else if (s_init_wait_ticks >= 4)
 		{
-			ready = 1;
+			extern int halo_server_mode(void);
+			if (find_valid_bsp_spawn_point(&spawn_pos, &spawn_yaw))
+			{
+				ready = 1;
+			}
+			else if (halo_server_mode())
+			{
+				spawn_pos.x = 0.0f;
+				spawn_pos.y = 0.0f;
+				spawn_pos.z = 0.0f;
+				spawn_yaw = 0.0f;
+				ready = 1;
+			}
 		}
 
 		if (ready)
