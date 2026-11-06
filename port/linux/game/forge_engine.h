@@ -13,11 +13,11 @@
 extern "C" {
 #endif
 
-/* ---------- Forge Release Version & Network Protocol Isolation (v2.3.3, 0x4628) */
+/* ---------- Forge Release Version & Network Protocol Isolation (v2.3.5, 0x4628) */
 
 #include "halo_port_limits.h"
 
-#define FORGE_VERSION_STRING "2.3.3"
+#define FORGE_VERSION_STRING "2.3.5"
 #define FORGE_NETWORK_VERSION 0x4628
 #define FORGE_GAME_KIND 0x46
 #ifndef HALO_PORT_NETWORK_VERSION_STOCK
@@ -35,6 +35,10 @@ char *main_get_map_name(void);
 char const *forge_get_active_map_name(void);
 void *forge_host_fopen(char const *path, char const *mode);
 int forge_host_remove(char const *path);
+int forge_host_rename(char const *old_path, char const *new_path);
+void forge_server_mark_dirty(void);
+void forge_server_autosave_tick(void);
+int forge_server_save_map_if_dirty(int force_full_export);
 
 #ifndef _WIN32
 extern int strcasecmp(char const *a, char const *b);
