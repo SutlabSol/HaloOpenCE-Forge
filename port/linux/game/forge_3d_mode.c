@@ -2500,6 +2500,8 @@ int32_t forge_3d_spawn_object_at_slot(
 		}
 	}
 	inst = &g_forge.live_instances[live_idx];
+	if (inst->active && inst->object_index != NONE && forge_valid_object_get(inst->object_index))
+		object_delete(inst->object_index);
 	memset(inst, 0, sizeof(*inst));
 	inst->active = 1;
 	inst->object_index = NONE;

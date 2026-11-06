@@ -2819,8 +2819,8 @@ static void patch_forge_device_and_light_tag_runtime(long tag_idx, uint32_t grp,
 	}
 
 	/* Patch attached 'ligh' tags so placed lights, spotlights, and point lights cast dynamic illumination */
-	att_cnt = *(int32_t const *)(obuf + 0x138u);
-	att_base = *(uint8_t *const *)(obuf + 0x13Cu);
+	att_cnt = *(int32_t const *)(obuf + 0x140u);
+	att_base = *(uint8_t *const *)(obuf + 0x144u);
 	for (a = 0; a < att_cnt && att_base; a++)
 	{
 		uint8_t *att = att_base + (size_t)a * 72u;
