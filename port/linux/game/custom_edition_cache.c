@@ -1066,7 +1066,7 @@ static boolean custom_edition_file_is_forge_xbox_mp(
 		return FALSE;
 	}
 	if (!file->source.read ||
-		!file->source.read(file->source.context, 0x1FCu, &sig, sizeof(sig)))
+		!file->source.read(file->source.context, 0x1FCu, sizeof(sig), &sig))
 	{
 		return FALSE;
 	}
