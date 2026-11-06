@@ -4776,6 +4776,8 @@ long network_game_server_port_remote_machine_count(
 	return count;
 }
 
+void custom_edition_map_paths_forget(void);
+
 void network_game_server_port_refresh_map_version(
 	void)
 {
