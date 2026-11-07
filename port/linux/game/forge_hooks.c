@@ -518,56 +518,7 @@ static void scan_forge_edit_maps(int wanted_tab)
 	s_forge_menu.first = 0;
 	s_forge_menu.chosen = 0;
 
-	/* Scan OpenCE Forge/forge_maps/<name>/ subfolders (where .txt and .bmp live, with .map in custom_maps/<name>.map or OpenCE Forge/forge_maps/<name>/<name>.map) */
-	h = FindFirstFileA("OpenCE Forge\\forge_maps\\*", &fd);
-	if (h == INVALID_HANDLE_VALUE)
-		h = FindFirstFileA("forge_maps\\*", &fd);
-	if (h != INVALID_HANDLE_VALUE)
-	{
-		do
-		{
-			char full_path[512];
-			char leaf[64];
-			int is_user = 0;
-			FILE *tf;
-
-			if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-				continue;
-			if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0)
-				continue;
-
-			snprintf(leaf, sizeof(leaf), "%s", fd.cFileName);
-			snprintf(full_path, sizeof(full_path), "custom_maps/%s.map", leaf);
-			tf = fopen(full_path, "rb");
-			if (tf)
-			{
-				fclose(tf);
-			}
-			else
-			{
-				snprintf(full_path, sizeof(full_path), "OpenCE Forge/forge_maps/%s/%s.map", leaf, leaf);
-				tf = fopen(full_path, "rb");
-				if (tf)
-					fclose(tf);
-				else
-					snprintf(full_path, sizeof(full_path), "forge_maps/%s/%s.map", leaf, leaf);
-			}
-			if (is_forge_created_map_file(full_path, leaf, &is_user))
-			{
-				if ((wanted_tab == 0 && is_user) || (wanted_tab == 1 && !is_user))
-				{
-					if (s_forge_menu.count < FORGE_MAX_EDIT_MAPS)
-					{
-						int idx = s_forge_menu.count++;
-						snprintf(s_forge_menu.map_leaves[idx], sizeof(s_forge_menu.map_leaves[0]), "%s", leaf);
-					}
-				}
-			}
-		} while (FindNextFileA(h, &fd));
-		CloseHandle(h);
-	}
-
-	/* Also scan Custom Edition maps discovered by the engine (works regardless of CWD) */
+	/* Scan Custom Edition maps discovered by the engine (works regardless of CWD) */
 	{
 		short total_ce = custom_edition_maps_count(FALSE);
 		short i;
@@ -1048,20 +999,6 @@ static int resolve_add_tags_map_path(int kind, int entry, char *out_path, size_t
 		return 1;
 	}
 	snprintf(out_path, out_sz, "custom_maps\\%s.map", leaf);
-	tf = fopen(out_path, "rb");
-	if (tf)
-	{
-		fclose(tf);
-		return 1;
-	}
-	snprintf(out_path, out_sz, "OpenCE Forge\\forge_maps\\%s\\%s.map", leaf, leaf);
-	tf = fopen(out_path, "rb");
-	if (tf)
-	{
-		fclose(tf);
-		return 1;
-	}
-	snprintf(out_path, out_sz, "forge_maps\\%s\\%s.map", leaf, leaf);
 	tf = fopen(out_path, "rb");
 	if (tf)
 	{
@@ -3378,127 +3315,7 @@ void menu_tags_loaded(char const *map_name)
 		forge_runtime_init();
 }
 
-/* ---------- Point 11: Redirect custom_maps\<name>.(map|bmp|txt) to forge_maps\<name>\<name>.(map|bmp|txt) */
-
-extern void *file_reference_create_from_path(void *reference, char const *full_path, boolean is_directory);
-
-static char const *resolve_forge_maps_redirect_path(char const *path, char *out_buf, size_t out_sz)
-{
-	char const *leaf = NULL;
-	char const *dot;
-	char sub_dir[64];
-	char disk_check[512];
-	size_t base_len;
-	int has_d = 0;
-	FILE *tf;
-
-	if (!path || !path[0])
-		return path;
-
-	if (_strnicmp(path, "d:\\custom_maps\\", 15) == 0 || _strnicmp(path, "d:/custom_maps/", 15) == 0)
-	{
-		has_d = 1;
-		leaf = path + 15;
-	}
-	else if (_strnicmp(path, "custom_maps\\", 12) == 0 || _strnicmp(path, "custom_maps/", 12) == 0)
-	{
-		has_d = 0;
-		leaf = path + 12;
-	}
-	else
-	{
-		return path;
-	}
-
-	if (strchr(leaf, '\\') != NULL || strchr(leaf, '/') != NULL)
-		return path;
-
-	if (_stricmp(leaf, "bitmaps.map") == 0 ||
-		_stricmp(leaf, "sounds.map") == 0 ||
-		_stricmp(leaf, "loc.map") == 0)
-	{
-		snprintf(disk_check, sizeof(disk_check), "custom_maps\\%s", leaf);
-		tf = fopen(disk_check, "rb");
-		if (tf)
-		{
-			fclose(tf);
-			return path;
-		}
-		snprintf(disk_check, sizeof(disk_check), "OpenCE Forge\\forge_maps\\%s", leaf);
-		tf = fopen(disk_check, "rb");
-		if (tf)
-		{
-			fclose(tf);
-			snprintf(out_buf, out_sz, "%sOpenCE Forge\\forge_maps\\%s", has_d ? "d:\\" : "", leaf);
-			return out_buf;
-		}
-		return path;
-	}
-
-	dot = strrchr(leaf, '.');
-	base_len = dot ? (size_t)(dot - leaf) : strlen(leaf);
-	if (base_len == 0 || base_len >= sizeof(sub_dir))
-		return path;
-
-	memcpy(sub_dir, leaf, base_len);
-	sub_dir[base_len] = '\0';
-
-	/* If custom.bmp exists inside OpenCE Forge\forge_maps\<name>\custom.bmp or forge_maps\<name>\custom.bmp, prefer it as the custom map preview! */
-	if (dot && _stricmp(dot, ".bmp") == 0)
-	{
-		snprintf(disk_check, sizeof(disk_check), "OpenCE Forge\\forge_maps\\%s\\custom.bmp", sub_dir);
-		tf = fopen(disk_check, "rb");
-		if (tf)
-		{
-			fclose(tf);
-			snprintf(out_buf, out_sz, "%sOpenCE Forge\\forge_maps\\%s\\custom.bmp", has_d ? "d:\\" : "", sub_dir);
-			return out_buf;
-		}
-		snprintf(disk_check, sizeof(disk_check), "forge_maps\\%s\\custom.bmp", sub_dir);
-		tf = fopen(disk_check, "rb");
-		if (tf)
-		{
-			fclose(tf);
-			snprintf(out_buf, out_sz, "%sforge_maps\\%s\\custom.bmp", has_d ? "d:\\" : "", sub_dir);
-			return out_buf;
-		}
-	}
-
-	/* If the file exists directly in custom_maps\<leaf> (e.g. custom_maps\<name>.map or custom_maps\<name>.bmp), use it */
-	snprintf(disk_check, sizeof(disk_check), "custom_maps\\%s", leaf);
-	tf = fopen(disk_check, "rb");
-	if (tf)
-	{
-		fclose(tf);
-		return path;
-	}
-
-	snprintf(disk_check, sizeof(disk_check), "OpenCE Forge\\forge_maps\\%s\\%s", sub_dir, leaf);
-	tf = fopen(disk_check, "rb");
-	if (tf)
-	{
-		fclose(tf);
-		snprintf(out_buf, out_sz, "%sOpenCE Forge\\forge_maps\\%s\\%s", has_d ? "d:\\" : "", sub_dir, leaf);
-		return out_buf;
-	}
-
-	snprintf(disk_check, sizeof(disk_check), "forge_maps\\%s\\%s", sub_dir, leaf);
-	tf = fopen(disk_check, "rb");
-	if (tf)
-	{
-		fclose(tf);
-		snprintf(out_buf, out_sz, "%sforge_maps\\%s\\%s", has_d ? "d:\\" : "", sub_dir, leaf);
-		return out_buf;
-	}
-	return path;
-}
-
-void *forge_ce_file_reference_create_from_path(void *reference, char const *full_path, boolean is_directory)
-{
-	char redirected[512];
-	char const *actual = resolve_forge_maps_redirect_path(full_path, redirected, sizeof(redirected));
-	return file_reference_create_from_path(reference, actual, is_directory);
-}
+/* ---------- Point 11: Serve embedded .bmp / .txt sidecars from custom_maps\<name>.map header */
 
 #define FORGE_EMBED_FILE_SENTINEL ((FILE *)(uintptr_t)0x7F046E99u)
 
@@ -3592,9 +3409,7 @@ static FILE *try_open_embedded_map_sidecar(char const *filename)
 
 FILE *forge_ce_fopen(char const *filename, char const *mode)
 {
-	char redirected[512];
-	char const *actual = resolve_forge_maps_redirect_path(filename, redirected, sizeof(redirected));
-	FILE *fp = forge_platform_fopen(actual, mode);
+	FILE *fp = forge_platform_fopen(filename, mode);
 	if (!fp)
 		fp = try_open_embedded_map_sidecar(filename);
 	return fp;
@@ -3670,124 +3485,6 @@ int forge_ce_fclose(FILE *stream)
 		return 0;
 	}
 	return fclose(stream);
-}
-
-#define FORGE_CE_FIND_SENTINEL_HANDLE ((HANDLE)(uintptr_t)0x7F046E01u)
-
-static struct
-{
-	boolean in_use;
-	HANDLE primary_handle;
-	HANDLE forge_dirs_handle;
-} s_forge_ce_find = { FALSE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE };
-
-static BOOL forge_ce_advance_forge_dirs(LPWIN32_FIND_DATAA data)
-{
-	WIN32_FIND_DATAA dir_data;
-	BOOL got_entry;
-
-	if (s_forge_ce_find.forge_dirs_handle == INVALID_HANDLE_VALUE)
-	{
-		s_forge_ce_find.forge_dirs_handle = FindFirstFileA("d:\\forge_maps\\*.*", &dir_data);
-		if (s_forge_ce_find.forge_dirs_handle == INVALID_HANDLE_VALUE)
-			return FALSE;
-		got_entry = TRUE;
-	}
-	else
-	{
-		got_entry = FindNextFileA(s_forge_ce_find.forge_dirs_handle, &dir_data);
-	}
-
-	while (got_entry)
-	{
-		if ((dir_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-			dir_data.cFileName[0] != '.' &&
-			strlen(dir_data.cFileName) > 0 &&
-			strlen(dir_data.cFileName) < 64)
-		{
-			char map_check[512];
-			FILE *tf;
-			/* Skip if custom_maps\<name>.map already exists (already enumerated by primary_handle) */
-			snprintf(map_check, sizeof(map_check), "custom_maps\\%s.map", dir_data.cFileName);
-			tf = fopen(map_check, "rb");
-			if (tf)
-			{
-				fclose(tf);
-				got_entry = FindNextFileA(s_forge_ce_find.forge_dirs_handle, &dir_data);
-				continue;
-			}
-			snprintf(map_check, sizeof(map_check), "forge_maps\\%s\\%s.map", dir_data.cFileName, dir_data.cFileName);
-			tf = fopen(map_check, "rb");
-			if (tf)
-			{
-				fclose(tf);
-				memset(data, 0, sizeof(*data));
-				data->dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
-				snprintf(data->cFileName, sizeof(data->cFileName), "%s.map", dir_data.cFileName);
-				return TRUE;
-			}
-		}
-		got_entry = FindNextFileA(s_forge_ce_find.forge_dirs_handle, &dir_data);
-	}
-
-	CloseHandle(s_forge_ce_find.forge_dirs_handle);
-	s_forge_ce_find.forge_dirs_handle = INVALID_HANDLE_VALUE;
-	return FALSE;
-}
-
-HANDLE WINAPI forge_ce_FindFirstFileA(LPCSTR file_name, LPWIN32_FIND_DATAA data)
-{
-	if (!s_forge_ce_find.in_use && file_name &&
-		(_stricmp(file_name, "d:\\custom_maps\\*.*") == 0 ||
-		 _stricmp(file_name, "custom_maps\\*.*") == 0))
-	{
-		s_forge_ce_find.in_use = TRUE;
-		s_forge_ce_find.primary_handle = FindFirstFileA(file_name, data);
-		s_forge_ce_find.forge_dirs_handle = INVALID_HANDLE_VALUE;
-		if (s_forge_ce_find.primary_handle != INVALID_HANDLE_VALUE)
-			return FORGE_CE_FIND_SENTINEL_HANDLE;
-		if (forge_ce_advance_forge_dirs(data))
-			return FORGE_CE_FIND_SENTINEL_HANDLE;
-		s_forge_ce_find.in_use = FALSE;
-		return INVALID_HANDLE_VALUE;
-	}
-	return FindFirstFileA(file_name, data);
-}
-
-BOOL WINAPI forge_ce_FindNextFileA(HANDLE find_file, LPWIN32_FIND_DATAA data)
-{
-	if (find_file == FORGE_CE_FIND_SENTINEL_HANDLE)
-	{
-		if (s_forge_ce_find.primary_handle != INVALID_HANDLE_VALUE)
-		{
-			if (FindNextFileA(s_forge_ce_find.primary_handle, data))
-				return TRUE;
-			CloseHandle(s_forge_ce_find.primary_handle);
-			s_forge_ce_find.primary_handle = INVALID_HANDLE_VALUE;
-		}
-		return forge_ce_advance_forge_dirs(data);
-	}
-	return FindNextFileA(find_file, data);
-}
-
-BOOL WINAPI forge_ce_CloseHandle(HANDLE hObject)
-{
-	if (hObject == FORGE_CE_FIND_SENTINEL_HANDLE)
-	{
-		if (s_forge_ce_find.primary_handle != INVALID_HANDLE_VALUE)
-		{
-			CloseHandle(s_forge_ce_find.primary_handle);
-			s_forge_ce_find.primary_handle = INVALID_HANDLE_VALUE;
-		}
-		if (s_forge_ce_find.forge_dirs_handle != INVALID_HANDLE_VALUE)
-		{
-			CloseHandle(s_forge_ce_find.forge_dirs_handle);
-			s_forge_ce_find.forge_dirs_handle = INVALID_HANDLE_VALUE;
-		}
-		s_forge_ce_find.in_use = FALSE;
-		return TRUE;
-	}
-	return CloseHandle(hObject);
 }
 
 /* ---------- Disable Menu, Mouse, Keyboard & Controller Interaction When halo.exe Is Unfocused */

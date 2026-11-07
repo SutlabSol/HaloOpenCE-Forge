@@ -361,14 +361,10 @@ static int forge_source_map_open(char const *path, struct forge_source_map *map)
 		if (map->version == CACHE_VERSION_XBOX)
 		{
 			int slot;
-			for (slot = -2; slot <= 6; slot++)
+			for (slot = 0; slot <= 6; slot++)
 			{
 				char z_xbox[64];
-				if (slot == -2)
-					snprintf(cache_cand, sizeof(cache_cand), "OpenCE Forge/cached_tags/xbox_cache/%s.map", map->map_name);
-				else if (slot == -1)
-					snprintf(cache_cand, sizeof(cache_cand), "OpenCE Forge/cached_tags/xbox_cache/%s", map->filename);
-				else if (slot < 6)
+				if (slot < 6)
 				{
 					snprintf(z_xbox, sizeof(z_xbox), "z:\\cache00%d.map", slot);
 					platform_translate_path(z_xbox, cache_cand, sizeof(cache_cand));
@@ -2148,6 +2144,8 @@ static int32_t out_map_bake_faber_vault_bundle(
 					char const *slabel = (char const *)(out->data + s0_foff + 0x04u);
 					sflags &= ~0x01u;
 					sflags |= (1u << 2) | (1u << 4) | (1u << 5);
+					if (strstr(ft->name, "wraith") != NULL)
+						sflags |= (1u << 3);
 					write_u32(out->data + s0_foff + 0x00u, sflags);
 					if (_stricmp(slabel, "W-driver") != 0 &&
 						_stricmp(slabel, "G-driver") != 0 &&
@@ -2160,6 +2158,39 @@ static int32_t out_map_bake_faber_vault_bundle(
 						memset(out->data + s0_foff + 0x04u, 0, 32u);
 						memcpy(out->data + s0_foff + 0x04u, "W-driver", 8u);
 					}
+				}
+			}
+		}
+		else if (ft->fourcc == 'coll' && ft->root_sz >= 0x24Cu && strstr(ft->name, "wraith") != NULL)
+		{
+			int32_t mat_cnt = read_s32(out->data + def_foff + 0x234u);
+			uint32_t mat_addr = read_u32(out->data + def_foff + 0x238u);
+			int32_t reg_cnt = read_s32(out->data + def_foff + 0x240u);
+			uint32_t reg_addr = read_u32(out->data + def_foff + 0x244u);
+			int32_t k;
+			write_f32(out->data + def_foff + 0x08u, 0.0f);
+			write_u32(out->data + def_foff + 0xB4u, 0xFFFFFFFFu);
+			write_f32(out->data + def_foff + 0xB8u, 0.0f);
+			write_u32(out->data + def_foff + 0xC8u, 0xFFFFFFFFu);
+			write_f32(out->data + def_foff + 0xCCu, 0.0f);
+			if (mat_cnt > 0 && mat_cnt <= 64 && mat_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t m_base = tag_data_offset + (mat_addr - CE_TAG_BASE_ADDR);
+				for (k = 0; k < mat_cnt && m_base + (uint32_t)(k + 1) * 0x48u <= out->size; k++)
+				{
+					write_f32(out->data + m_base + (uint32_t)k * 0x48u + 0x2Cu, 0.0f);
+					write_f32(out->data + m_base + (uint32_t)k * 0x48u + 0x3Cu, 0.0f);
+				}
+			}
+			if (reg_cnt > 0 && reg_cnt <= 64 && reg_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t r_base = tag_data_offset + (reg_addr - CE_TAG_BASE_ADDR);
+				for (k = 0; k < reg_cnt && r_base + (uint32_t)(k + 1) * 0x54u <= out->size; k++)
+				{
+					uint32_t r_foff = r_base + (uint32_t)k * 0x54u;
+					write_u32(out->data + r_foff + 0x20u, read_u32(out->data + r_foff + 0x20u) & ~0x0Eu);
+					write_f32(out->data + r_foff + 0x28u, 0.0f);
+					write_u32(out->data + r_foff + 0x44u, 0xFFFFFFFFu);
 				}
 			}
 		}
@@ -2272,7 +2303,6 @@ static int cb_find_xbox_donor_map_for_tag(
 		"sidewinder.map", "wizard.map"
 	};
 	static char const *const map_dirs[] = {
-		"OpenCE Forge/cached_tags/xbox_cache",
 		"maps",
 		"assets/maps",
 		"../assets/maps"
@@ -2283,10 +2313,10 @@ static int cb_find_xbox_donor_map_for_tag(
 		return 0;
 	out_map_path[0] = '\0';
 
-	/* 1. Check .fxtg compressed Xbox tag bundles in OpenCE Forge/custom_tags/ */
+	/* 1. Check .fxtg compressed Xbox tag bundles in OpenCE Forge/cached_tags/ */
 	{
 		WIN32_FIND_DATAA fd;
-		HANDLE h = FindFirstFileA("OpenCE Forge/custom_tags/*.fxtg", &fd);
+		HANDLE h = FindFirstFileA("OpenCE Forge/cached_tags/*.fxtg", &fd);
 		if (h != INVALID_HANDLE_VALUE)
 		{
 			do
@@ -2295,7 +2325,7 @@ static int cb_find_xbox_donor_map_for_tag(
 				{
 					char fxtg_path[512];
 					FILE *fp;
-					snprintf(fxtg_path, sizeof(fxtg_path), "OpenCE Forge/custom_tags/%s", fd.cFileName);
+					snprintf(fxtg_path, sizeof(fxtg_path), "OpenCE Forge/cached_tags/%s", fd.cFileName);
 					fp = fopen(fxtg_path, "rb");
 					if (fp)
 					{
@@ -2321,10 +2351,7 @@ static int cb_find_xbox_donor_map_for_tag(
 								{
 									char tmp_donor[512];
 									FILE *df;
-									FORGE_MKDIR("OpenCE Forge/cached_tags");
-									FORGE_MKDIR("OpenCE Forge/cached_tags/xbox_cache");
-									snprintf(tmp_donor, sizeof(tmp_donor),
-										"OpenCE Forge/cached_tags/xbox_cache/_fxtg_bake_donor.map");
+									platform_translate_path("z:\\cache_donor.map", tmp_donor, sizeof(tmp_donor));
 									df = fopen(tmp_donor, "wb");
 									if (df)
 									{
@@ -3861,6 +3888,8 @@ static int32_t out_map_bake_xbox_tag_closure(
 					char const *slabel = (char const *)(out->data + s0_foff + 0x04u);
 					sflags &= ~0x01u; /* clear _unit_seat_invisible_bit */
 					sflags |= (1u << 2) | (1u << 4) | (1u << 5); /* driver | third_person_camera | third_person_on_enter */
+					if (strstr(xt->name, "wraith") != NULL)
+						sflags |= (1u << 3); /* _unit_seat_gunner_bit */
 					write_u32(out->data + s0_foff + 0x00u, sflags);
 					if (_stricmp(slabel, "W-driver") != 0 &&
 						_stricmp(slabel, "G-driver") != 0 &&
@@ -3873,6 +3902,39 @@ static int32_t out_map_bake_xbox_tag_closure(
 						memset(out->data + s0_foff + 0x04u, 0, 32u);
 						memcpy(out->data + s0_foff + 0x04u, "W-driver", 8u);
 					}
+				}
+			}
+		}
+		else if (xt->fourcc == 'coll' && strstr(xt->name, "wraith") != NULL && xt->def_foff + 0x24Cu <= out->size)
+		{
+			int32_t mat_cnt = read_s32(out->data + xt->def_foff + 0x234u);
+			uint32_t mat_addr = read_u32(out->data + xt->def_foff + 0x238u);
+			int32_t reg_cnt = read_s32(out->data + xt->def_foff + 0x240u);
+			uint32_t reg_addr = read_u32(out->data + xt->def_foff + 0x244u);
+			int32_t k;
+			write_f32(out->data + xt->def_foff + 0x08u, 0.0f);
+			write_u32(out->data + xt->def_foff + 0xB4u, 0xFFFFFFFFu);
+			write_f32(out->data + xt->def_foff + 0xB8u, 0.0f);
+			write_u32(out->data + xt->def_foff + 0xC8u, 0xFFFFFFFFu);
+			write_f32(out->data + xt->def_foff + 0xCCu, 0.0f);
+			if (mat_cnt > 0 && mat_cnt <= 64 && mat_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t m_base = tag_data_offset + (mat_addr - CE_TAG_BASE_ADDR);
+				for (k = 0; k < mat_cnt && m_base + (uint32_t)(k + 1) * 0x48u <= out->size; k++)
+				{
+					write_f32(out->data + m_base + (uint32_t)k * 0x48u + 0x2Cu, 0.0f);
+					write_f32(out->data + m_base + (uint32_t)k * 0x48u + 0x3Cu, 0.0f);
+				}
+			}
+			if (reg_cnt > 0 && reg_cnt <= 64 && reg_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t r_base = tag_data_offset + (reg_addr - CE_TAG_BASE_ADDR);
+				for (k = 0; k < reg_cnt && r_base + (uint32_t)(k + 1) * 0x54u <= out->size; k++)
+				{
+					uint32_t r_foff = r_base + (uint32_t)k * 0x54u;
+					write_u32(out->data + r_foff + 0x20u, read_u32(out->data + r_foff + 0x20u) & ~0x0Eu);
+					write_f32(out->data + r_foff + 0x28u, 0.0f);
+					write_u32(out->data + r_foff + 0x44u, 0xFFFFFFFFu);
 				}
 			}
 		}
@@ -5568,12 +5630,6 @@ int forge_export_scenario_map(
 		snprintf(legacy_path, sizeof(legacy_path), "custom_maps/%s.bmp", output_map_name);
 		remove(legacy_path);
 		snprintf(legacy_path, sizeof(legacy_path), "custom_maps/%s.txt", output_map_name);
-		remove(legacy_path);
-		snprintf(legacy_path, sizeof(legacy_path), "forge_maps/%s/%s.map", output_map_name, output_map_name);
-		remove(legacy_path);
-		snprintf(legacy_path, sizeof(legacy_path), "forge_maps/%s/%s.bmp", output_map_name, output_map_name);
-		remove(legacy_path);
-		snprintf(legacy_path, sizeof(legacy_path), "forge_maps/%s/%s.txt", output_map_name, output_map_name);
 		remove(legacy_path);
 	}
 

@@ -853,7 +853,7 @@ int forge_catalog_entry_allowed(struct forge_catalog_entry const *entry)
 	{
 		return 0;
 	}
-	/* Allow standard vehicles and Pelican in the vehicle spawn list */
+	/* Allow standard vehicles, Pelican, and Wraith in the vehicle spawn list */
 	if (entry->group_tag == 'vehi' || entry->category == _forge_cat_vehicles)
 	{
 		static char const *const s_allowed_vehicles[] = {
@@ -865,6 +865,7 @@ int forge_catalog_entry_allowed(struct forge_catalog_entry const *entry)
 			"vehicles\\banshee\\banshee_mp",
 			"vehicles\\scorpion\\scorpion",
 			"vehicles\\pelican\\pelican",
+			"vehicles\\wraith\\wraith",
 			"vehicles\\c_gun_turret\\c_gun_turret",
 			"vehicles\\c_gun_turret\\c_gun_turret_mp",
 			"vehicles\\c gun turret\\c gun turret",
@@ -1029,8 +1030,6 @@ static void scan_cached_tags_manifest(char const *manifest_path)
 					continue;
 				}
 				if (src_id != 2 && grp == 'scen' && is_excluded_scenery_or_effect_tag(tag_path))
-					continue;
-				if (src_id != 2 && grp == 'vehi' && _stricmp(tag_path, "vehicles\\wraith\\wraith") == 0)
 					continue;
 				if (src_id != 2 && (grp == 'weap' || grp == 'eqip') && is_excluded_weapon_or_equipment_tag(tag_path))
 					continue;
@@ -1342,6 +1341,7 @@ void forge_runtime_reload_catalogs(void)
 
 #ifdef _WIN32
 int __stdcall CreateDirectoryA(char const *lpPathName, void *lpSecurityAttributes);
+int __stdcall RemoveDirectoryA(char const *lpPathName);
 __declspec(dllimport) int __stdcall MessageBoxA(void *hWnd, char const *lpText, char const *lpCaption, unsigned int uType);
 __declspec(dllimport) void *__stdcall LoadLibraryA(char const *lpLibFileName);
 __declspec(dllimport) void *__stdcall GetProcAddress(void *hModule, char const *lpProcName);
@@ -1453,37 +1453,6 @@ static int ensure_xbox_map_decompressed_cache(
 		return 0;
 	}
 
-	/* 0. Check if OpenCE Forge/cached_tags/xbox_cache/<map_internal_name>.map already holds this decompressed Xbox map! */
-	if (map_internal_name[0])
-	{
-		char xcache_path[512];
-		FILE *xf;
-		snprintf(xcache_path, sizeof(xcache_path), "OpenCE Forge/cached_tags/xbox_cache/%s.map", map_internal_name);
-		xf = fopen(xcache_path, "rb");
-		if (xf)
-		{
-			uint8_t xhdr[2048];
-			long xsz = 0;
-			fseek(xf, 0, SEEK_END);
-			xsz = ftell(xf);
-			fseek(xf, 0, SEEK_SET);
-			if (xsz >= (long)(tag_off + tag_sz) && fread(xhdr, 1, sizeof(xhdr), xf) == sizeof(xhdr))
-			{
-				if (*(uint32_t const *)(xhdr + 0x00) == 0x68656164u &&
-					*(uint32_t const *)(xhdr + 0x04) == 5u &&
-					*(uint32_t const *)(xhdr + 0x10) == tag_off &&
-					*(uint32_t const *)(xhdr + 0x14) == tag_sz)
-				{
-					fclose(xf);
-					fclose(in_fp);
-					snprintf(out_cache_path, out_cache_sz, "%s", xcache_path);
-					return 1;
-				}
-			}
-			fclose(xf);
-		}
-	}
-
 	/* 1. Check if OpenCE's Xbox hard-drive cache (z:\cache000.map .. z:\cache005.map or z:\cache_donor.map)
 	 * already holds this decompressed Xbox map; if so, use it directly without duplicating! */
 	for (slot = 0; slot <= 6; slot++)
@@ -1542,15 +1511,8 @@ static int ensure_xbox_map_decompressed_cache(
 		fseek(in_fp, 2048L, SEEK_SET);
 	}
 
-	/* 3. Stream-decompress Xbox v5 map into OpenCE Forge/cached_tags/xbox_cache/<map_internal_name>.map
-	 * so each Xbox map is only decompressed once and never overwrites a single shared donor file! */
-	CreateDirectoryA("OpenCE Forge", NULL);
-	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
-	CreateDirectoryA("OpenCE Forge/cached_tags/xbox_cache", NULL);
-	if (map_internal_name[0])
-		snprintf(out_cache_path, out_cache_sz, "OpenCE Forge/cached_tags/xbox_cache/%s.map", map_internal_name);
-	else
-		platform_translate_path("z:\\cache_donor.map", out_cache_path, out_cache_sz);
+	/* 3. Stream-decompress Xbox v5 map into transient z:\cache_donor.map scratch file */
+	platform_translate_path("z:\\cache_donor.map", out_cache_path, out_cache_sz);
 	{
 		FILE *tmp_out = fopen(out_cache_path, "wb");
 		z_stream strm;
@@ -1560,11 +1522,6 @@ static int ensure_xbox_map_decompressed_cache(
 		int zret = Z_OK;
 		int decomp_ok = 0;
 
-		if (!tmp_out)
-		{
-			platform_translate_path("z:\\cache_donor.map", out_cache_path, out_cache_sz);
-			tmp_out = fopen(out_cache_path, "wb");
-		}
 		if (!tmp_out)
 		{
 			fclose(in_fp);
@@ -1645,19 +1602,20 @@ static int forge_index_xbox_map_file_to_catalog(
 	FILE *legacy_manifest_fp,
 	FILE *credits_fp)
 {
-	char cache_path[512];
 	FILE *f;
 	uint8_t hdr[2048];
-	uint32_t tag_off, tag_sz, inst_addr, tag_base, inst_off;
+	uint32_t decomp_len, tag_off, tag_sz, inst_addr, tag_base, inst_off;
 	int32_t tag_count, i;
 	uint8_t *tag_buf;
 	int indexed_count = 0;
 	char map_internal_name[64];
+	long in_sz = 0;
+	int read_ok = 0;
 
-	if (!ensure_xbox_map_decompressed_cache(map_path, cache_path, sizeof(cache_path)))
+	if (!map_path || !map_path[0])
 		return 0;
 
-	f = fopen(cache_path, "rb");
+	f = fopen(map_path, "rb");
 	if (!f)
 		return 0;
 	if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr))
@@ -1665,6 +1623,13 @@ static int forge_index_xbox_map_file_to_catalog(
 		fclose(f);
 		return 0;
 	}
+	if (*(uint32_t const *)(hdr + 0x00) != 0x68656164u ||
+		*(uint32_t const *)(hdr + 0x04) != 5u)
+	{
+		fclose(f);
+		return 0;
+	}
+	decomp_len = *(uint32_t const *)(hdr + 0x08);
 	tag_off = *(uint32_t const *)(hdr + 0x10);
 	tag_sz = *(uint32_t const *)(hdr + 0x14);
 	memset(map_internal_name, 0, sizeof(map_internal_name));
@@ -1676,13 +1641,111 @@ static int forge_index_xbox_map_file_to_catalog(
 		return 0;
 	}
 	tag_buf = (uint8_t *)malloc(tag_sz);
-	if (!tag_buf || fseek(f, (long)tag_off, SEEK_SET) != 0 || fread(tag_buf, 1, tag_sz, f) != tag_sz)
+	if (!tag_buf)
 	{
-		free(tag_buf);
 		fclose(f);
 		return 0;
 	}
+
+	/* If map_path is already uncompressed on disk, read [tag_off .. tag_off + tag_sz) directly */
+	fseek(f, 0, SEEK_END);
+	in_sz = ftell(f);
+	if (decomp_len >= tag_off + tag_sz && in_sz >= (long)decomp_len)
+	{
+		uint32_t tag_sig = 0;
+		if (fseek(f, (long)(tag_off + 0x20u), SEEK_SET) == 0 &&
+			fread(&tag_sig, 4, 1, f) == 1 &&
+			tag_sig == 0x626C616Du /* 'blam' */ &&
+			fseek(f, (long)tag_off, SEEK_SET) == 0 &&
+			fread(tag_buf, 1, tag_sz, f) == tag_sz)
+		{
+			read_ok = 1;
+		}
+	}
+
+	/* Otherwise stream-inflate [tag_off .. tag_off + tag_sz) directly into tag_buf in memory without writing to disk */
+	if (!read_ok)
+	{
+		z_stream strm;
+		size_t const chunk_sz = 262144u;
+		uint8_t *in_chunk = (uint8_t *)malloc(chunk_sz);
+		uint8_t *out_chunk = (uint8_t *)malloc(chunk_sz);
+		uint32_t cur_off = 2048u;
+		int zret = Z_OK;
+
+		fseek(f, 2048L, SEEK_SET);
+		memset(&strm, 0, sizeof(strm));
+		if (in_chunk && out_chunk && inflateInit(&strm) == Z_OK)
+		{
+			int decomp_ok = 1;
+			do
+			{
+				strm.avail_in = (uInt)fread(in_chunk, 1, chunk_sz, f);
+				if (ferror(f))
+				{
+					decomp_ok = 0;
+					break;
+				}
+				if (strm.avail_in == 0)
+					break;
+				strm.next_in = in_chunk;
+				do
+				{
+					size_t have;
+					strm.avail_out = (uInt)chunk_sz;
+					strm.next_out = out_chunk;
+					zret = inflate(&strm, Z_NO_FLUSH);
+					if (zret == Z_NEED_DICT || zret == Z_DATA_ERROR || zret == Z_MEM_ERROR)
+					{
+						decomp_ok = 0;
+						break;
+					}
+					have = chunk_sz - (size_t)strm.avail_out;
+					if (have > 0)
+					{
+						uint32_t c_start = cur_off;
+						uint32_t c_end = cur_off + (uint32_t)have;
+						if (c_end > tag_off && c_start < tag_off + tag_sz)
+						{
+							uint32_t cp_start = (c_start > tag_off) ? c_start : tag_off;
+							uint32_t cp_end = (c_end < tag_off + tag_sz) ? c_end : (tag_off + tag_sz);
+							memcpy(
+								tag_buf + (cp_start - tag_off),
+								out_chunk + (cp_start - c_start),
+								(size_t)(cp_end - cp_start));
+						}
+						cur_off = c_end;
+					}
+					if (s_forge_loading_active && s_forge_loading_map_span > 0.0f)
+					{
+						unsigned long now_ms = system_milliseconds();
+						if (now_ms - s_forge_loading_last_ms >= 15u)
+						{
+							float map_frac = (decomp_len > 2048u)
+								? ((float)strm.total_out / (float)(decomp_len - 2048u))
+								: 0.5f;
+							if (map_frac < 0.0f) map_frac = 0.0f;
+							if (map_frac > 0.99f) map_frac = 0.99f;
+							forge_xbox_loading_screen_render_frame(
+								s_forge_loading_map_base + map_frac * s_forge_loading_map_span);
+						}
+					}
+				} while (strm.avail_out == 0 && cur_off < tag_off + tag_sz);
+			} while (decomp_ok && zret != Z_STREAM_END && cur_off < tag_off + tag_sz);
+			inflateEnd(&strm);
+			if (decomp_ok && cur_off >= tag_off + tag_sz)
+				read_ok = 1;
+		}
+		free(in_chunk);
+		free(out_chunk);
+	}
 	fclose(f);
+
+	if (!read_ok)
+	{
+		free(tag_buf);
+		return 0;
+	}
 
 	inst_addr = *(uint32_t const *)(tag_buf + 0x00);
 	tag_count = *(int32_t const *)(tag_buf + 0x0C);
@@ -1697,7 +1760,7 @@ static int forge_index_xbox_map_file_to_catalog(
 	if (credits_fp)
 	{
 		fprintf(credits_fp, "## Xbox Map: `%s` (`%s`)\n",
-			map_internal_name[0] ? map_internal_name : map_path, cache_path);
+			map_internal_name[0] ? map_internal_name : map_path, map_path);
 	}
 
 	for (i = 0; i < tag_count; i++)
@@ -1727,10 +1790,7 @@ static int forge_index_xbox_map_file_to_catalog(
 				cat_id = _forge_cat_equipment;
 		}
 		else if (grp == 'vehi')
-		{
-			if (_stricmp(tname, "vehicles\\wraith\\wraith") != 0)
-				cat_id = _forge_cat_vehicles;
-		}
+			cat_id = _forge_cat_vehicles;
 		else if (is_forge_door_tag(grp, tname))
 			cat_id = _forge_cat_barriers_devices;
 		else if (is_forge_light_beacon_emitter_tag(grp, tname) &&
@@ -1903,6 +1963,7 @@ int forge_reset_stock_tag_cache(void)
 	remove("OpenCE Forge/cached_tags/catalog.txt");
 	remove("OpenCE Forge/credits.md");
 	forge_delete_files_matching("OpenCE Forge/cached_tags/xbox_cache", "*.map");
+	RemoveDirectoryA("OpenCE Forge/cached_tags/xbox_cache");
 	forge_delete_files_matching("OpenCE Forge/cached_tags/markers", "m_*.*");
 
 	for (slot = 0; slot <= 6; slot++)
@@ -1934,8 +1995,7 @@ int forge_clear_custom_tag_cache(void)
 				break;
 		}
 	}
-	forge_delete_files_matching("OpenCE Forge/custom_tags", "*.fxtg");
-	forge_delete_files_matching("custom_tags", "*.fxtg");
+	forge_delete_files_matching("OpenCE Forge/cached_tags", "*.fxtg");
 	forge_delete_files_matching("OpenCE Forge/cached_tags", "c_*.*");
 	forge_delete_files_matching("OpenCE Forge/cached_tags/markers", "c_*.*");
 	remove("OpenCE Forge/cached_tags/custom_catalog.txt");
@@ -1954,21 +2014,23 @@ static void forge_ensure_local_tag_cache_built(void)
 			char line[512];
 			int has_base_tags = 0;
 			int has_lights_and_door = 0;
+			int has_wraith = 0;
 			while (fgets(line, sizeof(line), f))
 			{
 				if (strstr(line, "|0|") != NULL)
 					has_base_tags = 1;
 				if (strstr(line, "beam emitter red") != NULL)
 					has_lights_and_door = 1;
+				if (strstr(line, "vehicles\\wraith\\wraith") != NULL)
+					has_wraith = 1;
 			}
 			fclose(f);
-			if (has_base_tags && has_lights_and_door)
+			if (has_base_tags && has_lights_and_door && has_wraith)
 				return;
 		}
 	}
 
 	CreateDirectoryA("OpenCE Forge", NULL);
-	CreateDirectoryA("OpenCE Forge/custom_tags", NULL);
 	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
 
 	{
@@ -2031,7 +2093,14 @@ void forge_runtime_init(void)
 	g_forge.save_map_name_len = (int)strlen(g_forge.save_map_name);
 
 	CreateDirectoryA("OpenCE Forge", NULL);
-	CreateDirectoryA("OpenCE Forge/custom_tags", NULL);
+	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
+	/* Clean up obsolete legacy directories if empty or containing duplicate Xbox maps */
+	forge_delete_files_matching("OpenCE Forge/cached_tags/xbox_cache", "*.map");
+	RemoveDirectoryA("OpenCE Forge/cached_tags/xbox_cache");
+	RemoveDirectoryA("OpenCE Forge/custom_tags");
+	RemoveDirectoryA("custom_tags");
+	RemoveDirectoryA("OpenCE Forge/forge_maps");
+	RemoveDirectoryA("forge_maps");
 	forge_ensure_local_tag_cache_built();
 	forge_runtime_reload_catalogs();
 }
@@ -2521,6 +2590,7 @@ static int is_valid_cyborg_driver_seat_label(char const *label)
 static void patch_vehicle_tag_for_player_driving(long vehi_tag_idx, char const *tag_path)
 {
 	struct unit_definition *ud;
+	int is_wraith = 0;
 
 	if (vehi_tag_idx == NONE)
 		return;
@@ -2528,6 +2598,11 @@ static void patch_vehicle_tag_for_player_driving(long vehi_tag_idx, char const *
 	ud = (struct unit_definition *)tag_get('vehi', vehi_tag_idx);
 	if (ud)
 	{
+		if ((tag_path && (strstr(tag_path, "wraith") || strstr(tag_path, "Wraith"))) ||
+			(ud->object.collision_model.name && strstr(ud->object.collision_model.name, "wraith")))
+		{
+			is_wraith = 1;
+		}
 		ud->unit.flags |= FLAG(_unit_has_entrance_points_inside_bounding_sphere_bit);
 		if (ud->unit.seats.count > 0 && ud->unit.seats.address)
 		{
@@ -2536,10 +2611,50 @@ static void patch_vehicle_tag_for_player_driving(long vehi_tag_idx, char const *
 			seat0->flags |= FLAG(_unit_seat_driver_bit) |
 							FLAG(_unit_seat_third_person_camera_bit) |
 							FLAG(_unit_seat_third_person_on_enter_bit);
-			if (tag_path && strstr(tag_path, "wraith"))
+			if (is_wraith)
 				seat0->flags |= FLAG(_unit_seat_gunner_bit);
 			if (!is_valid_cyborg_driver_seat_label(seat0->label))
 				snprintf(seat0->label, sizeof(seat0->label), "W-driver");
+		}
+		if (is_wraith && ud->object.collision_model.index != NONE)
+		{
+			uint8_t *cb = (uint8_t *)tag_get('coll', ud->object.collision_model.index);
+			if (cb)
+			{
+				int32_t m_cnt = *(int32_t const *)(cb + 0x220u);
+				uint8_t *m_ptr = *(uint8_t **)(cb + 0x224u);
+				int32_t r_cnt = *(int32_t const *)(cb + 0x22Cu);
+				uint8_t *r_ptr = *(uint8_t **)(cb + 0x230u);
+				int32_t k;
+
+				*(float *)(cb + 0x04u) = 0.0f; /* maximum_body_vitality = 0 (cannot take body damage) */
+				*(float *)(cb + 0x08u) = 0.0f; /* body_system_shock = 0 */
+				*(float *)(cb + 0x4Cu) = 0.0f; /* body_damaged_threshold = 0 */
+				*(int32_t *)(cb + 0x60u) = NONE; /* body_depleted_effect.index = NONE */
+				*(float *)(cb + 0x64u) = 0.0f; /* body_destroyed_threshold = 0 */
+				*(int32_t *)(cb + 0x74u) = NONE; /* body_destroyed_effect.index = NONE */
+				*(float *)(cb + 0x78u) = 0.0f; /* maximum_shield_vitality = 0 */
+
+				if (m_ptr && m_cnt > 0 && m_cnt <= 64)
+				{
+					for (k = 0; k < m_cnt; k++)
+					{
+						uint8_t *mp = m_ptr + (uint32_t)k * 0x48u;
+						*(float *)(mp + 0x2Cu) = 0.0f; /* shield_damage_multiplier */
+						*(float *)(mp + 0x3Cu) = 0.0f; /* body_damage_multiplier */
+					}
+				}
+				if (r_ptr && r_cnt > 0 && r_cnt <= 64)
+				{
+					for (k = 0; k < r_cnt; k++)
+					{
+						uint8_t *rp = r_ptr + (uint32_t)k * 0x54u;
+						*(uint32_t *)(rp + 0x20u) &= ~0x0Eu; /* clear forces_object_to_die / dies_when_object_dies / dies_in_water */
+						*(float *)(rp + 0x28u) = 0.0f; /* damage_threshold = 0 (cannot be destroyed) */
+						*(int32_t *)(rp + 0x50u) = NONE; /* destroyed_effect.index = NONE */
+					}
+				}
+			}
 		}
 	}
 }
@@ -3923,14 +4038,6 @@ static long load_native_xbox_tag_runtime(
 	stem_count = find_donor_map_stems_from_credits(req_group, req_path, candidate_stems, 8);
 	for (s = 0; s < stem_count; s++)
 	{
-		char xcache_cand[512];
-		snprintf(xcache_cand, sizeof(xcache_cand), "OpenCE Forge/cached_tags/xbox_cache/%s.map", candidate_stems[s]);
-		{
-			long hdl = load_native_xbox_tag_from_decompressed_map(
-				xcache_cand, req_group, req_path, out_actual_group);
-			if (hdl != NONE)
-				return hdl;
-		}
 		for (d = 0; d < (int)(sizeof(s_xbox_map_dirs) / sizeof(s_xbox_map_dirs[0])); d++)
 		{
 			char full_path[512];
@@ -4554,37 +4661,29 @@ static long load_compressed_xbox_bundle_runtime(
 	char const *req_path,
 	uint32_t *out_actual_group)
 {
-	static char const *const dirs[] = {
-		"OpenCE Forge/custom_tags",
-		"custom_tags"
-	};
-	int d;
-	for (d = 0; d < 2; d++)
+	char pat[512];
+	WIN32_FIND_DATAA fd;
+	HANDLE h;
+	snprintf(pat, sizeof(pat), "OpenCE Forge/cached_tags\\*.fxtg");
+	h = FindFirstFileA(pat, &fd);
+	if (h == INVALID_HANDLE_VALUE)
+		return NONE;
+	do
 	{
-		char pat[512];
-		WIN32_FIND_DATAA fd;
-		HANDLE h;
-		snprintf(pat, sizeof(pat), "%s\\*.fxtg", dirs[d]);
-		h = FindFirstFileA(pat, &fd);
-		if (h == INVALID_HANDLE_VALUE)
-			continue;
-		do
+		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
 		{
-			if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			char full[512];
+			long hdl;
+			snprintf(full, sizeof(full), "OpenCE Forge/cached_tags/%s", fd.cFileName);
+			hdl = load_compressed_xbox_bundle_from_file(full, req_group, req_path, out_actual_group);
+			if (hdl != NONE)
 			{
-				char full[512];
-				long hdl;
-				snprintf(full, sizeof(full), "%s/%s", dirs[d], fd.cFileName);
-				hdl = load_compressed_xbox_bundle_from_file(full, req_group, req_path, out_actual_group);
-				if (hdl != NONE)
-				{
-					CloseHandle(h);
-					return hdl;
-				}
+				CloseHandle(h);
+				return hdl;
 			}
-		} while (FindNextFileA(h, &fd));
-		CloseHandle(h);
-	}
+		}
+	} while (FindNextFileA(h, &fd));
+	CloseHandle(h);
 	return NONE;
 }
 
@@ -5540,29 +5639,6 @@ void forge_load_saved_map_state_if_present(char const *map_name)
 						free(buf);
 					}
 				}
-			}
-		}
-		fclose(f);
-	}
-
-	/* 2. Legacy fallback for maps saved before embedded state */
-	snprintf(txt_path, sizeof(txt_path), "forge_maps/%s/%s.txt", leaf, leaf);
-	f = fopen(txt_path, "rb");
-	if (f)
-	{
-		long sz;
-		fseek(f, 0, SEEK_END);
-		sz = ftell(f);
-		fseek(f, 0, SEEK_SET);
-		if (sz > 0 && sz < 4 * 1024 * 1024)
-		{
-			char *buf = (char *)malloc((size_t)sz + 1u);
-			if (buf)
-			{
-				size_t rd = fread(buf, 1, (size_t)sz, f);
-				buf[rd] = 0;
-				parse_forge_state_text_buffer(buf, leaf);
-				free(buf);
 			}
 		}
 		fclose(f);
@@ -6921,8 +6997,6 @@ static int open_preview_xbox_donor_for_tag(uint32_t req_group, char const *req_p
 			fclose(f);
 			if (!is_xbox_version5_map_file(cand))
 				continue;
-			snprintf(decomp, sizeof(decomp), "OpenCE Forge/cached_tags/xbox_cache/%s.map", stems[s]);
-			CreateDirectoryA("OpenCE Forge/cached_tags/xbox_cache", NULL);
 			if (!ensure_xbox_map_decompressed_cache(cand, decomp, sizeof(decomp)))
 				continue;
 			f = fopen(decomp, "rb");
@@ -7172,8 +7246,6 @@ int forge_ui_open_map_for_tag_browser(char const *map_path)
 
 		CreateDirectoryA("OpenCE Forge", NULL);
 		CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
-		CreateDirectoryA("OpenCE Forge/cached_tags/xbox_cache", NULL);
-		snprintf(decomp_path, sizeof(decomp_path), "OpenCE Forge/cached_tags/xbox_cache/%s.map", s_map_browser.map_name);
 		if (!ensure_xbox_map_decompressed_cache(map_path, decomp_path, sizeof(decomp_path)))
 			return 0;
 
@@ -7930,8 +8002,8 @@ static int extract_compressed_xbox_map_tag(
 	safe_file[w_idx] = '\0';
 
 	CreateDirectoryA("OpenCE Forge", NULL);
-	CreateDirectoryA("OpenCE Forge/custom_tags", NULL);
-	snprintf(fxtg_path, sizeof(fxtg_path), "OpenCE Forge/custom_tags/%s_%08X.fxtg", safe_file, (unsigned int)grp);
+	CreateDirectoryA("OpenCE Forge/cached_tags", NULL);
+	snprintf(fxtg_path, sizeof(fxtg_path), "OpenCE Forge/cached_tags/%s_%08X.fxtg", safe_file, (unsigned int)grp);
 	memset(&fhdr, 0, sizeof(fhdr));
 	fhdr.magic = 0x31545846u; /* 'FXT1' */
 	fhdr.group_tag = grp;
@@ -8525,50 +8597,42 @@ int forge_ui_installed_tag_count(int category_tab)
 
 static int find_fxtg_file_for_tag(uint32_t grp, char const *tag_path, char *out_file, size_t out_sz, uint32_t *out_disk_bytes)
 {
-	static char const *const dirs[] = {
-		"OpenCE Forge/custom_tags",
-		"custom_tags"
-	};
-	int d;
-	for (d = 0; d < 2; d++)
+	char pat[512];
+	WIN32_FIND_DATAA fd;
+	HANDLE h;
+	snprintf(pat, sizeof(pat), "OpenCE Forge/cached_tags\\*.fxtg");
+	h = FindFirstFileA(pat, &fd);
+	if (h == INVALID_HANDLE_VALUE)
+		return 0;
+	do
 	{
-		char pat[512];
-		WIN32_FIND_DATAA fd;
-		HANDLE h;
-		snprintf(pat, sizeof(pat), "%s\\*.fxtg", dirs[d]);
-		h = FindFirstFileA(pat, &fd);
-		if (h == INVALID_HANDLE_VALUE)
-			continue;
-		do
+		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
 		{
-			if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			char full[512];
+			FILE *fp;
+			struct fxtg_bundle_header hdr;
+			snprintf(full, sizeof(full), "OpenCE Forge/cached_tags/%s", fd.cFileName);
+			fp = fopen(full, "rb");
+			if (fp)
 			{
-				char full[512];
-				FILE *fp;
-				struct fxtg_bundle_header hdr;
-				snprintf(full, sizeof(full), "%s/%s", dirs[d], fd.cFileName);
-				fp = fopen(full, "rb");
-				if (fp)
+				if (fread(&hdr, 1, sizeof(hdr), fp) == sizeof(hdr) &&
+					hdr.magic == 0x31545846u &&
+					hdr.group_tag == grp &&
+					_stricmp(hdr.tag_path, tag_path) == 0)
 				{
-					if (fread(&hdr, 1, sizeof(hdr), fp) == sizeof(hdr) &&
-						hdr.magic == 0x31545846u &&
-						hdr.group_tag == grp &&
-						_stricmp(hdr.tag_path, tag_path) == 0)
-					{
-						fclose(fp);
-						CloseHandle(h);
-						if (out_file && out_sz > 0)
-							snprintf(out_file, out_sz, "%s", full);
-						if (out_disk_bytes)
-							*out_disk_bytes = (uint32_t)sizeof(hdr) + hdr.compressed_size;
-						return 1;
-					}
 					fclose(fp);
+					CloseHandle(h);
+					if (out_file && out_sz > 0)
+						snprintf(out_file, out_sz, "%s", full);
+					if (out_disk_bytes)
+						*out_disk_bytes = (uint32_t)sizeof(hdr) + hdr.compressed_size;
+					return 1;
 				}
+				fclose(fp);
 			}
-		} while (FindNextFileA(h, &fd));
-		CloseHandle(h);
-	}
+		}
+	} while (FindNextFileA(h, &fd));
+	CloseHandle(h);
 	return 0;
 }
 
