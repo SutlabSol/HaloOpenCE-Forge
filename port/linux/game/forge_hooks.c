@@ -361,49 +361,26 @@ static int is_forge_created_map_file(char const *map_path, char const *leaf_no_e
 
 static int is_custom_map_leaf_forge_made(char const *leaf_no_ext)
 {
+	static char const *const s_probe_fmts[] = {
+		"OpenCE Forge/forge_maps/%s/%s.txt",
+		"OpenCE Forge/forge_maps/%s/%s.map",
+		"forge_maps/%s/%s.txt",
+		"forge_maps/%s/%s.map"
+	};
 	char check_path[512];
-	FILE *f;
+	size_t i;
 
 	if (!leaf_no_ext || !leaf_no_ext[0])
 		return 0;
-
 	if (is_leaf_named_forge_suffix(leaf_no_ext))
 		return 1;
-
-	/* Any map with metadata in OpenCE Forge/forge_maps/<name>/<name>.txt or legacy forge_maps/<name>/<name>.map is a Forge map */
-	snprintf(check_path, sizeof(check_path), "OpenCE Forge/forge_maps/%s/%s.txt", leaf_no_ext, leaf_no_ext);
-	f = forge_open_data_file_rb(check_path);
-	if (f)
+	for (i = 0; i < sizeof(s_probe_fmts) / sizeof(s_probe_fmts[0]); i++)
 	{
-		fclose(f);
-		return 1;
+		FILE *f;
+		snprintf(check_path, sizeof(check_path), s_probe_fmts[i], leaf_no_ext, leaf_no_ext);
+		f = forge_open_data_file_rb(check_path);
+		if (f) { fclose(f); return 1; }
 	}
-
-	snprintf(check_path, sizeof(check_path), "OpenCE Forge/forge_maps/%s/%s.map", leaf_no_ext, leaf_no_ext);
-	f = forge_open_data_file_rb(check_path);
-	if (f)
-	{
-		fclose(f);
-		return 1;
-	}
-
-	snprintf(check_path, sizeof(check_path), "forge_maps/%s/%s.txt", leaf_no_ext, leaf_no_ext);
-	f = forge_open_data_file_rb(check_path);
-	if (f)
-	{
-		fclose(f);
-		return 1;
-	}
-
-	snprintf(check_path, sizeof(check_path), "forge_maps/%s/%s.map", leaf_no_ext, leaf_no_ext);
-	f = forge_open_data_file_rb(check_path);
-	if (f)
-	{
-		fclose(f);
-		return 1;
-	}
-
-	/* Also check if custom_maps/<name>.map has the 'FLG1' Forge header marker */
 	snprintf(check_path, sizeof(check_path), "custom_maps/%s.map", leaf_no_ext);
 	return is_forge_created_map_file(check_path, leaf_no_ext, NULL);
 }

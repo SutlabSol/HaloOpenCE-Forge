@@ -4522,10 +4522,13 @@ static void game_engine_update_teleporter(
 	long source_flag_index;
 	long destination_flag_index;
 
-	if (player->unit_index == NONE)
+	if (!scenario || scenario->netgame_flags.count <= 0 || player->unit_index == NONE)
 		return;
 
 	unit = unit_get(player->unit_index);
+	/* port: guard against out-of-range teleporter_index in single player or after live edits */
+	if (player->teleporter_index < 0 || player->teleporter_index >= scenario->netgame_flags.count)
+		player->teleporter_index = NONE;
 	if (player->teleporter_index != NONE)
 	{
 		struct scenario_netgame_flag *previous_flag = TAG_BLOCK_GET_ELEMENT(
@@ -5038,6 +5041,16 @@ void game_engine_update(
 				!"unreachable");
 			break;
 		}
+	}
+	/* port: single-player teleporters and queued sounds */
+	else if (global_scenario_try_and_get() && !main_menu_is_active())
+	{
+		struct data_iterator player_iterator;
+
+		game_engine_update_multiplayer_sound();
+		data_iterator_new(&player_iterator, player_data);
+		while (data_iterator_next(&player_iterator))
+			game_engine_update_teleporter(player_iterator.datum_index);
 	}
 
 	return;

@@ -1249,6 +1249,9 @@ TITLES = {
     f"{MT}/lobby/header_lobby": "GAME LOBBY",
     f"{MT}/coop/header_player_2": "PLAYER 2 PROFILE",
     f"{MT}/lobby/header_add_player": "ADD PLAYER",
+    f"{MT}/header_standard": "STANDARD",
+    f"{MT}/header_forge": "FORGE",
+    f"{MT}/gamemode/header_gamemode": "GAMEMODE",
 }
 
 
@@ -2986,10 +2989,95 @@ def _forge_screens() -> list:
     return lines
 
 
+def forge_logo_svg() -> str:
+    """The Forge gamemode emblem SVG (256x256): hexagonal shield with outer
+    blue glow, double hexagonal frame, subtle horizontal scanlines, and central
+    Hammer & Anvil."""
+    scanlines = "\n".join(
+        f'    <line x1="88" y1="{y}" x2="168" y2="{y}" stroke="#0f3b6d" stroke-width="0.75"/>'
+        for y in range(50, 150, 6)
+    )
+    return "\n".join([
+        '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">',
+        "  <defs>",
+        '    <filter id="g1" filterUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">'
+        '<feGaussianBlur stdDeviation="1.82"/></filter>',
+        '    <filter id="g2" filterUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">'
+        '<feGaussianBlur stdDeviation="6.46"/></filter>',
+        '    <path id="outer_hex" d="M128,39 L176,66 L176,122 L128,160 L80,122 L80,66 Z"/>',
+        '    <path id="inner_hex" d="M128,46 L168,70 L168,118 L128,150.5 L88,118 L88,70 Z"/>',
+        '    <clipPath id="inner_clip"><use href="#inner_hex"/></clipPath>',
+        '    <path id="hammer" d="M106,62 L146,62 L150,68 L142,71 L139,69 L134,72 L134,106 L122,106 L122,72 L106,72 Z"/>',
+        '    <path id="anvil" d="M100,108 L156,108 L149,118 L140,118 L144,130 L112,130 L116,118 L107,118 Z"/>',
+        "  </defs>",
+        '  <use href="#outer_hex" fill="none" stroke="#2895ff" stroke-width="6.2" stroke-linejoin="round" '
+        'opacity="0.75" filter="url(#g2)"/>',
+        '  <use href="#outer_hex" fill="none" stroke="#2895ff" stroke-width="2.5" stroke-linejoin="round" '
+        'opacity="0.9" filter="url(#g1)"/>',
+        '  <use href="#outer_hex" fill="#000000" stroke="#2896ff" stroke-width="2" stroke-linejoin="round"/>',
+        '  <use href="#inner_hex" fill="#0c2c55" fill-opacity="0.98"/>',
+        '  <g clip-path="url(#inner_clip)">',
+        scanlines,
+        "  </g>",
+        '  <use href="#inner_hex" fill="none" stroke="#2896ff" stroke-width="1.5" stroke-linejoin="round"/>',
+        '  <use href="#hammer" fill="#000000" stroke="#2896ff" stroke-width="1.5" stroke-linejoin="round"/>',
+        '  <use href="#anvil" fill="#000000" stroke="#2896ff" stroke-width="1.5" stroke-linejoin="round"/>',
+        "</svg>",
+        "",
+    ])
+
+
+def forge_logo_frames() -> list:
+    """The (svg, width, height) frames for port_picture('gamemode/forge_logo', ...)."""
+    return [(forge_logo_svg(), 256, 256)]
+
+
+def name_input_box_frames() -> list:
+    """The (svg, width, height) frames for port_picture('name_input_box', ...):
+    184x28 rounded input box frames inside a 256x32 bitmap."""
+    frame0 = "\n".join([
+        '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="32" viewBox="0 0 256 32">',
+        "  <!-- unselected name input background: translucent dark rounded bar (184px wide) -->",
+        '  <rect x="2" y="2" width="180" height="24" rx="10" fill="#001122" fill-opacity="0.6"/>',
+        "</svg>",
+        "",
+    ])
+    frame1 = "\n".join([
+        '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="32" viewBox="0 0 256 32">',
+        "  <!-- focused name input rounded panel with 2px blue outline (184px wide) -->",
+        '  <path d="M10,0 H174 A10,10 0 0 1 184,10 V18 A10,10 0 0 1 174,28 H10 A10,10 0 0 1 0,18 V10 A10,10 0 0 1 10,0 Z" fill="#002244"/>',
+        '  <rect x="1" y="1" width="182" height="26" rx="9" fill="none" stroke="#2299ff" stroke-width="2"/>',
+        "</svg>",
+        "",
+    ])
+    return [(frame0, 256, 32), (frame1, 256, 32)]
+
+
 def _build_name_input_box_pngs(ce_dir: Path) -> None:
-    """Generates 184x28 rounded input box frames (inside 256x32 / 4x 1024x128 PNGs) from option_bkds_sm."""
+    """Writes the Forge SVGs to port/assets/menus/port_svg/ and renders their 4x PNGs in ce/port/."""
+    import shutil
+    import subprocess
+    menus_dir = ce_dir.parent
+    port_svg_dir = menus_dir / "port_svg"
     out_dir = ce_dir / "port"
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Write SVG source definitions to port/assets/menus/port_svg/
+    for name, frames in (("gamemode/forge_logo", forge_logo_frames()), ("name_input_box", name_input_box_frames())):
+        for idx, (svg_text, width, height) in enumerate(frames):
+            svg_path = port_svg_dir / f"{name}__{idx}.svg"
+            svg_path.parent.mkdir(parents=True, exist_ok=True)
+            svg_path.write_text(svg_text, encoding="utf-8", newline="\n")
+            if shutil.which("rsvg-convert"):
+                png_path = out_dir / f"{name}__{idx}.png"
+                png_path.parent.mkdir(parents=True, exist_ok=True)
+                subprocess.run(
+                    ["rsvg-convert", "-w", str(width * 4), "-h", str(height * 4), "-o", str(png_path), str(svg_path)],
+                    check=True,
+                )
+    if shutil.which("rsvg-convert"):
+        return
+
     try:
         from PIL import Image
         for idx in (0, 1):
