@@ -7134,6 +7134,7 @@ static void widget_instance_render_recursive(
 	(port/linux/game/custom_edition_maps.c) */
 	frame_index = widget->animation.current_frame_index;
 	custom_edition_picture = custom_edition_maps_picture(definition->background_bitmap.index, &frame_index);
+	/* port: 3D tag preview bitmap (port/linux/game/tag_preview.c) */
 	tag_preview_picture_shown = !custom_edition_picture && widget->name && !strcmp(widget->name, "tag_preview") ?
 		tag_preview_picture() : NULL;
 	if (tag_preview_picture_shown)

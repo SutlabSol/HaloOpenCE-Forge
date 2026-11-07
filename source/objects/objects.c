@@ -4165,6 +4165,7 @@ static boolean object_update(
 		object_compute_change_colors(object_index);
 
 		if (
+			!TEST_FLAG(header->flags, _object_header_being_deleted_bit) &&
 			TEST_FLAG(object->object.flags, _object_dynamic_lighting_recompute_bit) &&
 			(
 				!TEST_FLAG(object->object.flags, _object_invisible_bit) ||
@@ -4878,7 +4879,12 @@ static void object_connect_lights(
 	boolean disconnect,
 	boolean reconnect)
 {
+	struct object_header_datum *header = object_header_get(object_index);
 	struct object_datum *object = object_get(object_index);
+
+	/* port: do not reconnect lights for an object already marked for deletion */
+	if (header && TEST_FLAG(header->flags, _object_header_being_deleted_bit))
+		reconnect = FALSE;
 
 	if (TEST_FLAG(object->object.flags, _object_has_attached_lights_bit))
 	{

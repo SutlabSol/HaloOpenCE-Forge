@@ -15,7 +15,7 @@
   mouse): by pugzysixtyfour (`port/assets/cursor`).
 - **The Forge menus and objective marker models** (the Forge menu headers,
   icons and the in-engine spawn, teleporter, hill, flag, oddball and race
-  marker meshes): by Mota-Lev (`port/assets/menus/port_svg/main_menu/multiplayer_type_select`,
+  marker meshes): by Mota-Lev (`port/assets/menus/port_svg`,
   `port/assets/menus/ce/port`, `port/linux/game/forge_marker_ftags_embed.h`).
 
 ## Third-party art

@@ -1399,6 +1399,7 @@ void light_delete_all_for_object(
 	long object_index)
 {
 	long light_index;
+	struct object_datum *object;
 
 	if (object_index == NONE || !light_data || !light_data->valid)
 		return;
@@ -1411,6 +1412,19 @@ void light_delete_all_for_object(
 		{
 			light_delete(light_index);
 		}
+	}
+	object = object_try_and_get(object_index);
+	if (object)
+	{
+		short i;
+
+		for (i = 0; i < MAXIMUM_NUMBER_OF_ATTACHMENTS_PER_OBJECT; ++i)
+		{
+			if (object->object.attachment_types[i] == _object_attachment_type_light)
+				object->object.attachment_indices[i] = NONE;
+		}
+		SET_FLAG(object->object.flags, _object_has_attached_lights_bit, FALSE);
+		SET_FLAG(object->object.flags, _object_dynamic_lighting_recompute_bit, FALSE);
 	}
 }
 
@@ -2005,12 +2019,17 @@ void lights_render_specular(
 void light_reconnect_to_map(
 	long light_index)
 {
-	struct light_datum *light = light_get(light_index);
-	struct point_light_definition *definition = light_definition_get(light->definition_index);
+	struct light_datum *light = datum_try_and_get(light_data, light_index);
+	struct point_light_definition *definition;
 	struct object_marker markers[1];
 	struct location location;
 	real_point3d position;
 	real radius;
+
+	/* port: guard against stale or deleted light handles */
+	if (!light)
+		return;
+	definition = light_definition_get(light->definition_index);
 
 	if (light->parent_light_index == NONE)
 	{

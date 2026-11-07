@@ -221,6 +221,15 @@ static uint32_t buf_alloc(struct forge_byte_buf *b, uint32_t bytes, uint32_t ali
 	return offset;
 }
 
+static void buf_append_bytes(struct forge_byte_buf *b, void const *src, int len)
+{
+	if (len > 0 && b->data)
+	{
+		uint32_t o = buf_alloc(b, (uint32_t)len, 1);
+		if (b->data) memcpy(b->data + o, src, (size_t)len);
+	}
+}
+
 /* ---------- schema lookup */
 
 static struct tag_schema_group const *forge_schema_group_get(uint32_t group_tag)
@@ -352,14 +361,10 @@ static int forge_source_map_open(char const *path, struct forge_source_map *map)
 		if (map->version == CACHE_VERSION_XBOX)
 		{
 			int slot;
-			for (slot = -2; slot <= 6; slot++)
+			for (slot = 0; slot <= 6; slot++)
 			{
 				char z_xbox[64];
-				if (slot == -2)
-					snprintf(cache_cand, sizeof(cache_cand), "OpenCE Forge/cached_tags/xbox_cache/%s.map", map->map_name);
-				else if (slot == -1)
-					snprintf(cache_cand, sizeof(cache_cand), "OpenCE Forge/cached_tags/xbox_cache/%s", map->filename);
-				else if (slot < 6)
+				if (slot < 6)
 				{
 					snprintf(z_xbox, sizeof(z_xbox), "z:\\cache00%d.map", slot);
 					platform_translate_path(z_xbox, cache_cand, sizeof(cache_cand));
@@ -2117,12 +2122,12 @@ static int32_t out_map_bake_faber_vault_bundle(
 			if (rad < 4.5f)
 				write_f32(out->data + def_foff + 0x04u, 4.5f);
 		}
-		else if ((ft->fourcc == 'scen' || ft->fourcc == 'lifi' || ft->fourcc == 'mach') && ft->root_sz >= 0x17Cu) { if (read_f32(out->data + def_foff + 0x04u) < 1.5f) write_f32(out->data + def_foff + 0x04u, 1.5f); if (read_f32(out->data + def_foff + 0x104u) < 8.0f) write_f32(out->data + def_foff + 0x104u, 8.0f); } else if (0)
+		else if ((ft->fourcc == 'scen' || ft->fourcc == 'lifi' || ft->fourcc == 'mach') && ft->root_sz >= 0x17Cu)
 		{
-			if (read_f32(out->data + def_foff + 0x04u) < 0.45f)
-				write_f32(out->data + def_foff + 0x04u, 0.45f);
-			if (read_f32(out->data + def_foff + 0x104u) < 1.5f)
-				write_f32(out->data + def_foff + 0x104u, 1.5f);
+			if (read_f32(out->data + def_foff + 0x04u) < 1.5f)
+				write_f32(out->data + def_foff + 0x04u, 1.5f);
+			if (read_f32(out->data + def_foff + 0x104u) < 8.0f)
+				write_f32(out->data + def_foff + 0x104u, 8.0f);
 		}
 		else if (ft->fourcc == 'vehi' && ft->root_sz >= 0x3F0u)
 		{
@@ -2139,6 +2144,8 @@ static int32_t out_map_bake_faber_vault_bundle(
 					char const *slabel = (char const *)(out->data + s0_foff + 0x04u);
 					sflags &= ~0x01u;
 					sflags |= (1u << 2) | (1u << 4) | (1u << 5);
+					if (strstr(ft->name, "wraith") != NULL)
+						sflags |= (1u << 3);
 					write_u32(out->data + s0_foff + 0x00u, sflags);
 					if (_stricmp(slabel, "W-driver") != 0 &&
 						_stricmp(slabel, "G-driver") != 0 &&
@@ -2151,6 +2158,39 @@ static int32_t out_map_bake_faber_vault_bundle(
 						memset(out->data + s0_foff + 0x04u, 0, 32u);
 						memcpy(out->data + s0_foff + 0x04u, "W-driver", 8u);
 					}
+				}
+			}
+		}
+		else if (ft->fourcc == 'coll' && ft->root_sz >= 0x24Cu && strstr(ft->name, "wraith") != NULL)
+		{
+			int32_t mat_cnt = read_s32(out->data + def_foff + 0x234u);
+			uint32_t mat_addr = read_u32(out->data + def_foff + 0x238u);
+			int32_t reg_cnt = read_s32(out->data + def_foff + 0x240u);
+			uint32_t reg_addr = read_u32(out->data + def_foff + 0x244u);
+			int32_t k;
+			write_f32(out->data + def_foff + 0x08u, 0.0f);
+			write_u32(out->data + def_foff + 0xB4u, 0xFFFFFFFFu);
+			write_f32(out->data + def_foff + 0xB8u, 0.0f);
+			write_u32(out->data + def_foff + 0xC8u, 0xFFFFFFFFu);
+			write_f32(out->data + def_foff + 0xCCu, 0.0f);
+			if (mat_cnt > 0 && mat_cnt <= 64 && mat_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t m_base = tag_data_offset + (mat_addr - CE_TAG_BASE_ADDR);
+				for (k = 0; k < mat_cnt && m_base + (uint32_t)(k + 1) * 0x48u <= out->size; k++)
+				{
+					write_f32(out->data + m_base + (uint32_t)k * 0x48u + 0x2Cu, 0.0f);
+					write_f32(out->data + m_base + (uint32_t)k * 0x48u + 0x3Cu, 0.0f);
+				}
+			}
+			if (reg_cnt > 0 && reg_cnt <= 64 && reg_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t r_base = tag_data_offset + (reg_addr - CE_TAG_BASE_ADDR);
+				for (k = 0; k < reg_cnt && r_base + (uint32_t)(k + 1) * 0x54u <= out->size; k++)
+				{
+					uint32_t r_foff = r_base + (uint32_t)k * 0x54u;
+					write_u32(out->data + r_foff + 0x20u, read_u32(out->data + r_foff + 0x20u) & ~0x0Eu);
+					write_f32(out->data + r_foff + 0x28u, 0.0f);
+					write_u32(out->data + r_foff + 0x44u, 0xFFFFFFFFu);
 				}
 			}
 		}
@@ -2263,7 +2303,6 @@ static int cb_find_xbox_donor_map_for_tag(
 		"sidewinder.map", "wizard.map"
 	};
 	static char const *const map_dirs[] = {
-		"OpenCE Forge/cached_tags/xbox_cache",
 		"maps",
 		"assets/maps",
 		"../assets/maps"
@@ -2274,10 +2313,10 @@ static int cb_find_xbox_donor_map_for_tag(
 		return 0;
 	out_map_path[0] = '\0';
 
-	/* 1. Check .fxtg compressed Xbox tag bundles in OpenCE Forge/custom_tags/ */
+	/* 1. Check .fxtg compressed Xbox tag bundles in OpenCE Forge/cached_tags/ */
 	{
 		WIN32_FIND_DATAA fd;
-		HANDLE h = FindFirstFileA("OpenCE Forge/custom_tags/*.fxtg", &fd);
+		HANDLE h = FindFirstFileA("OpenCE Forge/cached_tags/*.fxtg", &fd);
 		if (h != INVALID_HANDLE_VALUE)
 		{
 			do
@@ -2286,7 +2325,7 @@ static int cb_find_xbox_donor_map_for_tag(
 				{
 					char fxtg_path[512];
 					FILE *fp;
-					snprintf(fxtg_path, sizeof(fxtg_path), "OpenCE Forge/custom_tags/%s", fd.cFileName);
+					snprintf(fxtg_path, sizeof(fxtg_path), "OpenCE Forge/cached_tags/%s", fd.cFileName);
 					fp = fopen(fxtg_path, "rb");
 					if (fp)
 					{
@@ -2312,10 +2351,7 @@ static int cb_find_xbox_donor_map_for_tag(
 								{
 									char tmp_donor[512];
 									FILE *df;
-									FORGE_MKDIR("OpenCE Forge/cached_tags");
-									FORGE_MKDIR("OpenCE Forge/cached_tags/xbox_cache");
-									snprintf(tmp_donor, sizeof(tmp_donor),
-										"OpenCE Forge/cached_tags/xbox_cache/_fxtg_bake_donor.map");
+									platform_translate_path("z:\\cache_donor.map", tmp_donor, sizeof(tmp_donor));
 									df = fopen(tmp_donor, "wb");
 									if (df)
 									{
@@ -2379,24 +2415,17 @@ static void cb_uncompress_xbox_model_vertex(uint8_t const *src32, uint8_t *dst68
 	int16_t u_s16, v_s16, w_s16;
 	int16_t n0, n1;
 	float w0, w1;
+	uint32_t k;
 
 	memset(dst68, 0, 68u);
 	memcpy(dst68 + 0x00u, src32 + 0x00u, 12u); /* position (3 floats) */
-
-	v = cb_uncompress_int32_to_real_vector3d(read_u32(src32 + 0x0Cu));
-	write_f32(dst68 + 0x0Cu, PIN(v.i, -1.0f, 1.0f));
-	write_f32(dst68 + 0x10u, PIN(v.j, -1.0f, 1.0f));
-	write_f32(dst68 + 0x14u, PIN(v.k, -1.0f, 1.0f));
-
-	v = cb_uncompress_int32_to_real_vector3d(read_u32(src32 + 0x10u));
-	write_f32(dst68 + 0x18u, PIN(v.i, -1.0f, 1.0f));
-	write_f32(dst68 + 0x1Cu, PIN(v.j, -1.0f, 1.0f));
-	write_f32(dst68 + 0x20u, PIN(v.k, -1.0f, 1.0f));
-
-	v = cb_uncompress_int32_to_real_vector3d(read_u32(src32 + 0x14u));
-	write_f32(dst68 + 0x24u, PIN(v.i, -1.0f, 1.0f));
-	write_f32(dst68 + 0x28u, PIN(v.j, -1.0f, 1.0f));
-	write_f32(dst68 + 0x2Cu, PIN(v.k, -1.0f, 1.0f));
+	for (k = 0; k < 3u; k++)
+	{
+		v = cb_uncompress_int32_to_real_vector3d(read_u32(src32 + 0x0Cu + k * 4u));
+		write_f32(dst68 + 0x0Cu + k * 12u, PIN(v.i, -1.0f, 1.0f));
+		write_f32(dst68 + 0x10u + k * 12u, PIN(v.j, -1.0f, 1.0f));
+		write_f32(dst68 + 0x14u + k * 12u, PIN(v.k, -1.0f, 1.0f));
+	}
 
 	u_s16 = read_s16(src32 + 0x18u);
 	v_s16 = read_s16(src32 + 0x1Au);
@@ -3859,6 +3888,8 @@ static int32_t out_map_bake_xbox_tag_closure(
 					char const *slabel = (char const *)(out->data + s0_foff + 0x04u);
 					sflags &= ~0x01u; /* clear _unit_seat_invisible_bit */
 					sflags |= (1u << 2) | (1u << 4) | (1u << 5); /* driver | third_person_camera | third_person_on_enter */
+					if (strstr(xt->name, "wraith") != NULL)
+						sflags |= (1u << 3); /* _unit_seat_gunner_bit */
 					write_u32(out->data + s0_foff + 0x00u, sflags);
 					if (_stricmp(slabel, "W-driver") != 0 &&
 						_stricmp(slabel, "G-driver") != 0 &&
@@ -3871,6 +3902,39 @@ static int32_t out_map_bake_xbox_tag_closure(
 						memset(out->data + s0_foff + 0x04u, 0, 32u);
 						memcpy(out->data + s0_foff + 0x04u, "W-driver", 8u);
 					}
+				}
+			}
+		}
+		else if (xt->fourcc == 'coll' && strstr(xt->name, "wraith") != NULL && xt->def_foff + 0x24Cu <= out->size)
+		{
+			int32_t mat_cnt = read_s32(out->data + xt->def_foff + 0x234u);
+			uint32_t mat_addr = read_u32(out->data + xt->def_foff + 0x238u);
+			int32_t reg_cnt = read_s32(out->data + xt->def_foff + 0x240u);
+			uint32_t reg_addr = read_u32(out->data + xt->def_foff + 0x244u);
+			int32_t k;
+			write_f32(out->data + xt->def_foff + 0x08u, 0.0f);
+			write_u32(out->data + xt->def_foff + 0xB4u, 0xFFFFFFFFu);
+			write_f32(out->data + xt->def_foff + 0xB8u, 0.0f);
+			write_u32(out->data + xt->def_foff + 0xC8u, 0xFFFFFFFFu);
+			write_f32(out->data + xt->def_foff + 0xCCu, 0.0f);
+			if (mat_cnt > 0 && mat_cnt <= 64 && mat_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t m_base = tag_data_offset + (mat_addr - CE_TAG_BASE_ADDR);
+				for (k = 0; k < mat_cnt && m_base + (uint32_t)(k + 1) * 0x48u <= out->size; k++)
+				{
+					write_f32(out->data + m_base + (uint32_t)k * 0x48u + 0x2Cu, 0.0f);
+					write_f32(out->data + m_base + (uint32_t)k * 0x48u + 0x3Cu, 0.0f);
+				}
+			}
+			if (reg_cnt > 0 && reg_cnt <= 64 && reg_addr >= CE_TAG_BASE_ADDR)
+			{
+				uint32_t r_base = tag_data_offset + (reg_addr - CE_TAG_BASE_ADDR);
+				for (k = 0; k < reg_cnt && r_base + (uint32_t)(k + 1) * 0x54u <= out->size; k++)
+				{
+					uint32_t r_foff = r_base + (uint32_t)k * 0x54u;
+					write_u32(out->data + r_foff + 0x20u, read_u32(out->data + r_foff + 0x20u) & ~0x0Eu);
+					write_f32(out->data + r_foff + 0x28u, 0.0f);
+					write_u32(out->data + r_foff + 0x44u, 0xFFFFFFFFu);
 				}
 			}
 		}
@@ -4226,11 +4290,7 @@ static int append_forge_map_metadata_and_preview_trailer(
 		base_map_label,
 		edits ? (int)edits->placed_object_count : 0,
 		edits ? (int)edits->ai_spawn_count : 0);
-	if (line_len > 0 && state_buf.data)
-	{
-		uint32_t o = buf_alloc(&state_buf, (uint32_t)line_len, 1);
-		if (state_buf.data) memcpy(state_buf.data + o, line, (size_t)line_len);
-	}
+	buf_append_bytes(&state_buf, line, line_len);
 	if (edits)
 	{
 		for (i = 0; i < edits->default_edit_count; i++)
@@ -4245,11 +4305,7 @@ static int append_forge_map_metadata_and_preview_trailer(
 				de->new_x, de->new_y, de->new_z,
 				de->new_yaw, de->new_pitch, de->new_roll,
 				de->tag_path);
-			if (line_len > 0 && state_buf.data)
-			{
-				uint32_t o = buf_alloc(&state_buf, (uint32_t)line_len, 1);
-				if (state_buf.data) memcpy(state_buf.data + o, line, (size_t)line_len);
-			}
+			buf_append_bytes(&state_buf, line, line_len);
 		}
 		for (i = 0; i < edits->placed_object_count; i++)
 		{
@@ -4292,10 +4348,47 @@ static int append_forge_map_metadata_and_preview_trailer(
 				po->yaw, po->pitch, po->roll,
 				(int)po->team_index,
 				po->tag_path);
-			if (line_len > 0 && state_buf.data)
+			buf_append_bytes(&state_buf, line, line_len);
+			if (po->gametype_flags != 0 && po->gametype_flags != 0x0FFFu)
 			{
-				uint32_t o = buf_alloc(&state_buf, (uint32_t)line_len, 1);
-				if (state_buf.data) memcpy(state_buf.data + o, line, (size_t)line_len);
+				line_len = snprintf(line, sizeof(line),
+					"OBJECT_GAMETYPE|%u\r\n",
+					(unsigned)po->gametype_flags);
+				buf_append_bytes(&state_buf, line, line_len);
+			}
+		}
+		if (edits->replace_player_spawns)
+		{
+			for (i = 0; i < edits->player_spawn_count; i++)
+			{
+				struct forge_player_spawn_entry const *sp = &edits->player_spawns[i];
+				int steam = (sp->type0 == 13) ? 2 : (int)sp->team_index;
+				int smode = (sp->type0 == 13) ? (int)sp->type1 : (int)sp->type0;
+				unsigned int sgflags =
+					(smode == 1) ? 0x0001u :
+					(smode == 2) ? 0x0002u :
+					(smode == 3) ? 0x0004u :
+					(smode == 4) ? 0x0008u :
+					(smode == 5) ? 0x0010u : 0u;
+				line_len = snprintf(line, sizeof(line),
+					"SPAWN|%.4f|%.4f|%.4f|%.4f|%d|%u\r\n",
+					sp->x, sp->y, sp->z, sp->yaw,
+					steam,
+					sgflags);
+				buf_append_bytes(&state_buf, line, line_len);
+			}
+		}
+		if (edits->replace_netgame_flags)
+		{
+			for (i = 0; i < edits->netgame_flag_count; i++)
+			{
+				struct forge_netgame_flag_entry const *nf = &edits->netgame_flags[i];
+				line_len = snprintf(line, sizeof(line),
+					"NETGAME_FLAG|%.4f|%.4f|%.4f|%.4f|%d|%d\r\n",
+					nf->x, nf->y, nf->z, nf->yaw,
+					(int)nf->type,
+					(int)nf->usage_id);
+				buf_append_bytes(&state_buf, line, line_len);
 			}
 		}
 		for (i = 0; i < edits->ai_spawn_count; i++)
@@ -4308,11 +4401,7 @@ static int append_forge_map_metadata_and_preview_trailer(
 				ai->x, ai->y, ai->z, ai->yaw,
 				(int)ai->team_designator,
 				ai->actor_variant_path);
-			if (line_len > 0 && state_buf.data)
-			{
-				uint32_t o = buf_alloc(&state_buf, (uint32_t)line_len, 1);
-				if (state_buf.data) memcpy(state_buf.data + o, line, (size_t)line_len);
-			}
+			buf_append_bytes(&state_buf, line, line_len);
 		}
 	}
 
@@ -4412,6 +4501,20 @@ static int forge_build_xbox_flg1_map(
 
 	snprintf(xbox_path, sizeof(xbox_path), "maps/%s.map", base_stem);
 	in_f = fopen(xbox_path, "rb");
+	if (!in_f)
+	{
+		char d_xbox[160];
+		snprintf(d_xbox, sizeof(d_xbox), "d:\\maps\\%s.map", base_stem);
+		platform_translate_path(d_xbox, xbox_path, sizeof(xbox_path));
+		in_f = fopen(xbox_path, "rb");
+	}
+	if (!in_f)
+	{
+		char h_xbox[160];
+		snprintf(h_xbox, sizeof(h_xbox), "h:\\maps\\%s.map", base_stem);
+		platform_translate_path(h_xbox, xbox_path, sizeof(xbox_path));
+		in_f = fopen(xbox_path, "rb");
+	}
 	if (!in_f && base_map_path && base_map_path[0])
 	{
 		snprintf(xbox_path, sizeof(xbox_path), "%s", base_map_path);
@@ -4500,20 +4603,56 @@ static int forge_build_xbox_flg1_map(
 		return 0;
 	}
 
-	snprintf(map_path, sizeof(map_path), "custom_maps/%s.map", output_map_name);
-	out_f = fopen(map_path, "wb");
-	if (!out_f)
 	{
-		buf_free(&out);
-		return 0;
-	}
-	if (fwrite(out.data, 1, out.size, out_f) != out.size)
-	{
+		char d_dir[512];
+		char d_map[160];
+		char tmp_map_path[520];
+		char legacy_path[512];
+		d_dir[0] = '\0';
+		platform_translate_path("d:\\custom_maps", d_dir, sizeof(d_dir));
+		if (d_dir[0])
+			FORGE_MKDIR(d_dir);
+		FORGE_MKDIR("custom_maps");
+		snprintf(d_map, sizeof(d_map), "d:\\custom_maps\\%s.map", output_map_name);
+		map_path[0] = '\0';
+		platform_translate_path(d_map, map_path, sizeof(map_path));
+		if (!map_path[0])
+			snprintf(map_path, sizeof(map_path), "custom_maps/%s.map", output_map_name);
+		snprintf(tmp_map_path, sizeof(tmp_map_path), "%s.tmp", map_path);
+		out_f = fopen(tmp_map_path, "wb");
+		if (!out_f)
+		{
+			snprintf(map_path, sizeof(map_path), "custom_maps/%s.map", output_map_name);
+			snprintf(tmp_map_path, sizeof(tmp_map_path), "%s.tmp", map_path);
+			out_f = fopen(tmp_map_path, "wb");
+		}
+		if (!out_f)
+		{
+			buf_free(&out);
+			return 0;
+		}
+		if (fwrite(out.data, 1, out.size, out_f) != out.size)
+		{
+			fclose(out_f);
+			remove(tmp_map_path);
+			buf_free(&out);
+			return 0;
+		}
 		fclose(out_f);
-		buf_free(&out);
-		return 0;
+		if (forge_host_rename(tmp_map_path, map_path) != 0)
+		{
+			remove(tmp_map_path);
+			buf_free(&out);
+			return 0;
+		}
+		snprintf(d_map, sizeof(d_map), "d:\\custom_maps\\%s.txt", output_map_name);
+		legacy_path[0] = '\0';
+		platform_translate_path(d_map, legacy_path, sizeof(legacy_path));
+		if (legacy_path[0])
+			remove(legacy_path);
+		snprintf(legacy_path, sizeof(legacy_path), "custom_maps/%s.txt", output_map_name);
+		remove(legacy_path);
 	}
-	fclose(out_f);
 	buf_free(&out);
 	return 1;
 }
@@ -4724,36 +4863,34 @@ int forge_export_scenario_map(
 	/* Ensure we open a Custom Edition (v609) base map container matching the current map (or fall back to OpenCE's Xbox v5 map) */
 	if (!forge_source_map_open(base_map_path, &base_map) || base_map.version != CACHE_VERSION_CE)
 	{
-		char want_file[128];
-		char h_xbox[160];
-		char cand_path[512];
+		static char const *const s_ce_fallback_fmts[] = {
+			"C:/Program Files (x86)/Microsoft Games/Halo Custom Edition/maps/%s",
+			"C:/Program Files/Microsoft Games/Halo Custom Edition/maps/%s",
+			"custom_maps/%s"
+		};
+		char want_file[128], h_xbox[160], cand_path[512];
+		size_t fi;
+		int opened_ce = 0;
+
 		forge_extract_basename(base_map_path, want_file, sizeof(want_file));
-		if (base_map.data)
-			forge_source_map_close(&base_map);
-		if (!want_file[0])
-			snprintf(want_file, sizeof(want_file), "bloodgulch.map");
+		if (base_map.data) forge_source_map_close(&base_map);
+		if (!want_file[0]) snprintf(want_file, sizeof(want_file), "bloodgulch.map");
 
 		snprintf(h_xbox, sizeof(h_xbox), "h:\\maps\\%s", want_file);
 		platform_translate_path(h_xbox, cand_path, sizeof(cand_path));
-		if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
+		if (forge_source_map_open(cand_path, &base_map) && base_map.version == CACHE_VERSION_CE)
+			opened_ce = 1;
+		for (fi = 0; !opened_ce && fi < sizeof(s_ce_fallback_fmts) / sizeof(s_ce_fallback_fmts[0]); fi++)
 		{
 			if (base_map.data) forge_source_map_close(&base_map);
-			snprintf(cand_path, sizeof(cand_path), "C:/Program Files (x86)/Microsoft Games/Halo Custom Edition/maps/%s", want_file);
-			if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
-			{
-				if (base_map.data) forge_source_map_close(&base_map);
-				snprintf(cand_path, sizeof(cand_path), "C:/Program Files/Microsoft Games/Halo Custom Edition/maps/%s", want_file);
-				if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
-				{
-					if (base_map.data) forge_source_map_close(&base_map);
-					snprintf(cand_path, sizeof(cand_path), "custom_maps/%s", want_file);
-					if (!forge_source_map_open(cand_path, &base_map) || base_map.version != CACHE_VERSION_CE)
-					{
-						if (base_map.data) forge_source_map_close(&base_map);
-						return forge_build_xbox_flg1_map(want_file, base_map_path, output_map_name, edits);
-					}
-				}
-			}
+			snprintf(cand_path, sizeof(cand_path), s_ce_fallback_fmts[fi], want_file);
+			if (forge_source_map_open(cand_path, &base_map) && base_map.version == CACHE_VERSION_CE)
+				opened_ce = 1;
+		}
+		if (!opened_ce)
+		{
+			if (base_map.data) forge_source_map_close(&base_map);
+			return forge_build_xbox_flg1_map(want_file, base_map_path, output_map_name, edits);
 		}
 	}
 
@@ -5436,11 +5573,28 @@ int forge_export_scenario_map(
 
 	free(pending_objs);
 
-	snprintf(map_path, sizeof(map_path), "custom_maps/%s.map", output_map_name);
 	{
+		char d_dir[512];
+		char d_map[160];
 		char tmp_map_path[520];
+		d_dir[0] = '\0';
+		platform_translate_path("d:\\custom_maps", d_dir, sizeof(d_dir));
+		if (d_dir[0])
+			FORGE_MKDIR(d_dir);
+		FORGE_MKDIR("custom_maps");
+		snprintf(d_map, sizeof(d_map), "d:\\custom_maps\\%s.map", output_map_name);
+		map_path[0] = '\0';
+		platform_translate_path(d_map, map_path, sizeof(map_path));
+		if (!map_path[0])
+			snprintf(map_path, sizeof(map_path), "custom_maps/%s.map", output_map_name);
 		snprintf(tmp_map_path, sizeof(tmp_map_path), "%s.tmp", map_path);
 		f = fopen(tmp_map_path, "wb");
+		if (!f)
+		{
+			snprintf(map_path, sizeof(map_path), "custom_maps/%s.map", output_map_name);
+			snprintf(tmp_map_path, sizeof(tmp_map_path), "%s.tmp", map_path);
+			f = fopen(tmp_map_path, "wb");
+		}
 		if (!f)
 		{
 			buf_free(&out);
@@ -5466,16 +5620,16 @@ int forge_export_scenario_map(
 	}
 	/* Remove any legacy external .bmp / .txt / sidecar files for this map once the new .map is safely in place */
 	{
+		char d_txt[160];
 		char legacy_path[512];
+		snprintf(d_txt, sizeof(d_txt), "d:\\custom_maps\\%s.txt", output_map_name);
+		legacy_path[0] = '\0';
+		platform_translate_path(d_txt, legacy_path, sizeof(legacy_path));
+		if (legacy_path[0])
+			remove(legacy_path);
 		snprintf(legacy_path, sizeof(legacy_path), "custom_maps/%s.bmp", output_map_name);
 		remove(legacy_path);
 		snprintf(legacy_path, sizeof(legacy_path), "custom_maps/%s.txt", output_map_name);
-		remove(legacy_path);
-		snprintf(legacy_path, sizeof(legacy_path), "forge_maps/%s/%s.map", output_map_name, output_map_name);
-		remove(legacy_path);
-		snprintf(legacy_path, sizeof(legacy_path), "forge_maps/%s/%s.bmp", output_map_name, output_map_name);
-		remove(legacy_path);
-		snprintf(legacy_path, sizeof(legacy_path), "forge_maps/%s/%s.txt", output_map_name, output_map_name);
 		remove(legacy_path);
 	}
 

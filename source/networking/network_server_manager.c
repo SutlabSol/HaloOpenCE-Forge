@@ -4776,6 +4776,8 @@ long network_game_server_port_remote_machine_count(
 	return count;
 }
 
+/* port: refresh the pregame lobby's map version after saving or overwriting a custom map in Forge,
+and start the game once every remote machine has finished precaching */
 void custom_edition_map_paths_forget(void);
 
 void network_game_server_port_refresh_map_version(

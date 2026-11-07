@@ -193,10 +193,12 @@ struct forge_catalog_entry const *forge_find_catalog_entry_by_hash(uint32_t hash
 void forge_send_packet_to_host(char const *text)
 {
 	struct forge_chat_packet pkt;
+	int p_abs;
 	if (!text || !text[0])
 		return;
 	memset(&pkt, 0, sizeof(pkt));
-	pkt.line.player_index = 0;
+	p_abs = forge_get_local_player_abs_index();
+	pkt.line.player_index = (p_abs >= 0 && p_abs < 255) ? (uint8_t)p_abs : 0;
 	pkt.line.flags = 0;
 	snprintf(pkt.line.text, sizeof(pkt.line.text), "%s", text);
 	distributed_send(&pkt, _distributed_message_chat_up, 1, sizeof(pkt), _distributed_to_host_reliably);

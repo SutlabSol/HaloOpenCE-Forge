@@ -115,41 +115,4 @@ was), and puts a file in another's place; 0 if it cannot */
 int port_tag_profiles_file_write(const char *path, const void *bytes, unsigned long size);
 int port_tag_profiles_file_replace(const char *from, const char *to);
 
-/* A network game's shared profile (port/linux/game/tag_multiplayer.c): a
-folder of tag_injector/.shared named for its id (lowercase letters and
-digits: the host's own "host", a download's its hash's first digits),
-opened alone into a slot of its own that no scan lists or forgets: the
-index the functions above take it by, or -1. _close lets go of the slot;
-_present says whether a folder of that id has a profile.toml; _delete
-deletes the folder; _remove deletes a file of the shared folder (an
-archive); _folder_make makes the shared folder (a download is written into
-it). The path of a file of the shared folder (<id>.tagshare) into `path`. */
-long port_tag_profiles_shared_open(const char *id);
-void port_tag_profiles_shared_close(void);
-int port_tag_profiles_shared(long profile);
-int port_tag_profiles_shared_present(const char *id);
-int port_tag_profiles_shared_delete(const char *id);
-int port_tag_profiles_shared_remove(const char *name);
-int port_tag_profiles_shared_folder_make(void);
-void port_tag_profiles_shared_path(const char *name, char *path, unsigned long size);
-/* A profile's tags on (of a group, or all: 0) in one file, `archive`: their
-files, the profile's pack and its index as they are, a profile.toml of
-them alone (each on, none failed), and the file `multiplayer` (a
-multiplayer profile's: NULL for none) as multiplayer.toml, or `campaign` (a
-campaign profile's, a co-op game's: NULL for none) as campaign.toml; how
-many tags, 0 if none or it cannot be written. An archive made a shared profile's folder
-(whole, or not at all: a folder of that id before is replaced); 0 if it
-cannot be. */
-long port_tag_profiles_shared_build(long profile, unsigned long group, const char *multiplayer, const char *campaign,
-	const char *archive);
-int port_tag_profiles_shared_unpack(const char *archive, const char *id);
-/* A client's copy of a share it downloaded, its own to play and change: a
-profile named as the host's with " (online)" (its tags, settings and pack),
-and the host's multiplayer or campaign profile playing it, if the share has one; made
-once a share (a marker, <id>.imported, beside it: deleted, it is not made
-again). The copy's index, else -1 (made before, or it cannot be). _all
-copies every download not copied yet: how many. */
-long port_tag_profiles_shared_import(const char *id);
-long port_tag_profiles_shared_import_all(void);
-
 #endif
